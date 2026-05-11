@@ -8,6 +8,7 @@ dependencies = [
     "gymnasium>=1.3.0",
     "matplot>=0.1.9",
     "pandas>=3.0.2",
+    "pygame>=2.6.1",
     "rllib>=0.0.1",
     "tensorboard>=2.20.0",
 ]
