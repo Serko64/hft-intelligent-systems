@@ -1,14 +1,27 @@
 [project]
 name = "hft-intelligent-systems"
 version = "0.1.0"
-description = "Add your description here"
+description = "F1 RL Simulator"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
-    "gymnasium>=1.3.0",
-    "matplot>=0.1.9",
-    "pandas>=3.0.2",
+    "gymnasium>=0.29.1,<1.3.0",
     "pygame>=2.6.1",
-    "rllib>=0.0.1",
     "tensorboard>=2.20.0",
+    "stable-baselines3[extra]>=2.8.0",
+    "shapely>=2.0.6",
+    "osmnx>=1.9.4",
+    "pyproj>=3.7.0",
+    "torch>=2.3.0",
+    "numpy>=1.26.0",
 ]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu124" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
