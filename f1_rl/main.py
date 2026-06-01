@@ -1,26 +1,38 @@
-"""F1 RL Simulator — entry point: main menu, live training view, visualization."""
+"""F1 RL Simulator — entry point and application state machine."""
 from __future__ import annotations
 
+import glob
 import json
-import math
 import os
 import queue
 import sys
 import threading
 import time
+from collections import deque
+from dataclasses import dataclass, field
 
+import numpy as np
 import pygame
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-CANVAS_W, CANVAS_H = 1600, 1000
-FPS = 60
+from f1_rl.config import (
+    BEST_LAPS_PATH, CANVAS_H, CANVAS_W, CIRCUITS, EVOLUTION_MODE_DEFAULT,
+    FPS, GENS_PRESETS, QTABLE_PATH, REPLAY_DIR, STEPS_PRESETS,
+)
+from f1_rl.renderer import (
+    draw_menu, draw_replay, draw_replay_browser,
+    draw_training, make_fonts, run_visualization,
+    REPLAY_BAR_X, REPLAY_BAR_Y, REPLAY_BAR_W, REPLAY_BAR_H,
+    TOP_PANEL_X0, TOP_PANEL_Y0, TOP_PANEL_W, TOP_ROW_FIRST_Y, TOP_ROW_H,
+    MENU_LIST_X, MENU_LIST_W, MENU_LIST_TOP, MENU_ITEM_H, MENU_VISIBLE,
+    _world_to_screen,
+)
+from f1_rl.track import meters_to_pixels as _meters_to_pixels
+from f1_rl.train import load_training_state
 
-ROOT = os.path.join(os.path.dirname(__file__), "..")
-CIRCUITS_DIR = os.path.join(ROOT, "circuits")
-MODEL_PATH = os.path.join(ROOT, "model", "ppo_f1.zip")
-BEST_LAPS_PATH = os.path.join(ROOT, "model", "best_laps.json")
 
+# ── Persistence helpers ───────────────────────────────────────────────────────
 
 def _load_best_laps() -> dict[str, float]:
     if os.path.exists(BEST_LAPS_PATH):
@@ -36,38 +48,143 @@ def _save_best_lap(circuit_name: str, seconds: float) -> None:
     with open(BEST_LAPS_PATH, "w", encoding="utf-8") as f:
         json.dump(laps, f, indent=2)
 
-# (name, geojson_path, half_width_m)
-CIRCUITS = [
-    ("Circuit de Monaco",            os.path.join(CIRCUITS_DIR, "mc-1929.geojson"), 20.0),
-    ("Silverstone Circuit",          os.path.join(CIRCUITS_DIR, "gb-1948.geojson"), 20.0),
-    ("Autodromo Nazionale Monza",    os.path.join(CIRCUITS_DIR, "it-1922.geojson"), 20.0),
-    ("Circuit de Spa-Francorchamps", os.path.join(CIRCUITS_DIR, "be-1925.geojson"), 20.0),
-    ("Suzuka Circuit",               os.path.join(CIRCUITS_DIR, "jp-1962.geojson"), 20.0),
-]
 
-BG     = (12, 12, 18)
-ACCENT = (200, 30, 30)
-TEXT   = (220, 220, 220)
-DIM    = (110, 110, 130)
-SEL_BG = (55, 25, 75)
-HOV_BG = (35, 35, 55)
-GOLD   = (255, 215, 0)
+def _load_replay_list() -> list[dict]:
+    if not os.path.exists(REPLAY_DIR):
+        return []
+    replays = []
+    for path in glob.glob(os.path.join(REPLAY_DIR, "replay_*.npz")):
+        try:
+            d = np.load(path, allow_pickle=True)
+            replays.append({
+                "path":       path,
+                "fitness":    float(d["fitness"][0]),
+                "generation": int(d["generation"][0]),
+                "circuit":    str(d["circuit"][0]),
+                "n_frames":   int(d["frames"].shape[0]),
+            })
+        except Exception:
+            pass
+    replays.sort(key=lambda r: r["fitness"], reverse=True)
+    return replays
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+def _find_circuit(name: str) -> tuple[str | None, float]:
+    for cname, fallback, hw in CIRCUITS:
+        if cname == name:
+            return fallback, hw
+    return None, 20.0
+
+
+# ── Track preview (menu) — lazy background loading ────────────────────────────
+
+_preview_cache: dict[str, object] = {}   # name -> TrackData | "loading" | "error"
+_preview_lock = threading.Lock()
+
+
+def _load_preview(name: str, fallback: str | None, hw: float) -> None:
+    try:
+        from f1_rl.track import load_track
+        tr = load_track(name, geojson_fallback_path=fallback, half_width_m=hw)
+        with _preview_lock:
+            _preview_cache[name] = tr
+    except Exception as e:
+        print(f"[main] Preview load failed for {name}: {e}")
+        with _preview_lock:
+            _preview_cache[name] = "error"
+
+
+def _ensure_preview(sel_idx: int):
+    """Return the cached preview for the selected circuit, kicking off a load if needed."""
+    name, fallback, hw = CIRCUITS[sel_idx]
+    with _preview_lock:
+        if name in _preview_cache:
+            return _preview_cache[name]
+        _preview_cache[name] = "loading"
+    threading.Thread(target=_load_preview, args=(name, fallback, hw), daemon=True).start()
+    return "loading"
+
+
+# ── Replay state ──────────────────────────────────────────────────────────────
+
+@dataclass
+class ReplayState:
+    frames: np.ndarray | None = None
+    track: object = None
+    idx: int = 0
+    paused: bool = False
+    speed: int = 1
+    zoom: float = 1.0
+    pan_x: int = 0
+    pan_y: int = 0
+    dragging: bool = False
+    drag_start: tuple = field(default_factory=lambda: (0, 0))
+    drag_start_pan: tuple = field(default_factory=lambda: (0, 0))
+    meta: dict = field(default_factory=dict)
+    return_state: str = "replays"
+
+    def reset_view(self) -> None:
+        self.pan_x = self.pan_y = 0
+        self.zoom = 1.0
+
+    def reset_pan(self) -> None:
+        self.pan_x = self.pan_y = 0
+
+
+def _open_replay_file(path: str, meta: dict, replay: ReplayState, return_state: str) -> bool:
+    """Load a .npz replay into *replay* in-place. Returns True on success."""
+    try:
+        d = np.load(path, allow_pickle=True)
+        circuit_name = str(d["circuit"][0])
+        fallback, hw = _find_circuit(circuit_name)
+        from f1_rl.track import load_track
+        replay.track  = load_track(circuit_name, geojson_fallback_path=fallback, half_width_m=hw)
+        replay.frames = d["frames"]
+        replay.meta   = meta or {
+            "fitness":    float(d["fitness"][0]),
+            "generation": int(d["generation"][0]),
+            "circuit":    circuit_name,
+        }
+        replay.idx          = 0
+        replay.paused       = False
+        replay.speed        = 1
+        replay.dragging     = False
+        replay.return_state = return_state
+        replay.reset_view()
+        return True
+    except Exception as e:
+        print(f"[main] Could not open replay {path}: {e}")
+        return False
+
+
+def _try_open_training_replay(gen: int, replay: ReplayState) -> bool:
+    """Load a generation's saved replay for side-watching during training."""
+    path = os.path.join(REPLAY_DIR, f"replay_g{gen:04d}.npz")
+    if not os.path.exists(path):
+        print(f"[main] Replay for gen {gen} not saved yet.")
+        return False
+    return _open_replay_file(path, {}, replay, return_state="training")
+
+
+# ── Training thread ───────────────────────────────────────────────────────────
+
 class _TrainingThread(threading.Thread):
     def __init__(self, query: str, fallback: str, half_width: float,
                  render_queue: queue.Queue, stats_queue: queue.Queue,
-                 resume: bool = False):
+                 resume: bool = False, steps_per_gen: int = 5_000,
+                 total_gens: int = 200, evolution_mode: str = "classic"):
         super().__init__(daemon=True)
-        self.query = query
-        self.fallback = fallback
-        self.half_width = half_width
-        self.render_queue = render_queue
-        self.stats_queue = stats_queue
-        self.resume = resume
-        self.model = None
-        self.track = None
+        self.query          = query
+        self.fallback       = fallback
+        self.half_width     = half_width
+        self.render_queue   = render_queue
+        self.stats_queue    = stats_queue
+        self.resume         = resume
+        self.steps_per_gen  = steps_per_gen
+        self.total_gens     = total_gens
+        self.evolution_mode = evolution_mode
+        self.model          = None
+        self.track          = None
         self.error: Exception | None = None
         self.done = False
 
@@ -85,6 +202,9 @@ class _TrainingThread(threading.Thread):
                 render_queue=self.render_queue,
                 stats_queue=self.stats_queue,
                 resume=self.resume,
+                steps_per_gen=self.steps_per_gen,
+                total_gens=self.total_gens,
+                evolution_mode=self.evolution_mode,
             )
         except Exception as e:
             self.error = e
@@ -92,341 +212,171 @@ class _TrainingThread(threading.Thread):
             self.done = True
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-def _font(name: str, size: int, bold: bool = False) -> pygame.font.Font:
-    return pygame.font.SysFont(name, size, bold=bold)
+# ── Main loop ─────────────────────────────────────────────────────────────────
 
-
-def _draw_menu(screen, fonts, sel_idx: int, hover_idx: int, train_state: dict | None) -> None:
-    screen.fill(BG)
-    f_title, f_lg, f_md, f_sm = fonts
-
-    t = f_title.render("F1 RL SIMULATOR", True, ACCENT)
-    screen.blit(t, (CANVAS_W // 2 - t.get_width() // 2, 60))
-
-    sub = f_sm.render("Select circuit → ENTER to train, L to load model", True, DIM)
-    screen.blit(sub, (CANVAS_W // 2 - sub.get_width() // 2, 115))
-
-    item_h = 44
-    list_top = 175
-    for i, (name, _, _hw) in enumerate(CIRCUITS):
-        y = list_top + i * item_h
-        rect = pygame.Rect(CANVAS_W // 2 - 230, y, 460, item_h - 4)
-        if i == sel_idx:
-            pygame.draw.rect(screen, SEL_BG, rect, border_radius=6)
-            pygame.draw.rect(screen, ACCENT, rect, 2, border_radius=6)
-        elif i == hover_idx:
-            pygame.draw.rect(screen, HOV_BG, rect, border_radius=6)
-        label = f_md.render(name, True, TEXT if i == sel_idx else DIM)
-        screen.blit(label, (rect.x + 16, rect.y + (rect.height - label.get_height()) // 2))
-
-    model_exists = os.path.exists(MODEL_PATH)
-
-    # Resume info panel
-    if train_state:
-        ts = train_state.get("timesteps_done", 0)
-        tot = train_state.get("total_timesteps", 1)
-        circuit = train_state.get("circuit", "?")
-        pct = min(100.0, ts / tot * 100)
-        info = f_sm.render(
-            f"Letztes Training: {circuit}  —  {ts:,} / {tot:,} steps  ({pct:.1f}%)",
-            True, GOLD,
-        )
-        screen.blit(info, (CANVAS_W // 2 - info.get_width() // 2, list_top + len(CIRCUITS) * item_h + 10))
-
-    hints = [
-        ("ENTER", "Neu trainieren  (live view)"),
-        ("R", "Training fortsetzen  (Resume)" if train_state else "Resume  (kein Checkpoint)"),
-        ("L", f"Laden & Fahren  {'✓ Modell gefunden' if model_exists else '(noch kein Modell)'}"),
-        ("↑ ↓", "Strecke wählen"),
-        ("ESC", "Beenden"),
-    ]
-    hx, hy = 60, CANVAS_H - 135
-    for key, desc in hints:
-        k = f_sm.render(f"[{key}]", True, GOLD)
-        d = f_sm.render(f"  {desc}", True, DIM)
-        screen.blit(k, (hx, hy))
-        screen.blit(d, (hx + k.get_width(), hy))
-        hy += 24
-
-
-_track_surf_cache: dict = {}
-_glow_surf: pygame.Surface | None = None
-_stats_panel: pygame.Surface | None = None
-
-
-def _get_track_surface(track) -> pygame.Surface:
-    tid = id(track)
-    if tid not in _track_surf_cache:
-        from f1_rl.track import draw_track
-        surf = pygame.Surface((track.canvas_w, track.canvas_h))
-        surf.fill((12, 12, 18))
-        draw_track(surf, track)
-        _track_surf_cache[tid] = surf
-    return _track_surf_cache[tid]
-
-
-def _get_glow_surf() -> pygame.Surface:
-    global _glow_surf
-    if _glow_surf is None:
-        _glow_surf = pygame.Surface((30, 30), pygame.SRCALPHA)
-        pygame.draw.circle(_glow_surf, (255, 80, 80, 60), (15, 15), 15)
-    return _glow_surf
-
-
-_scaled_track_cache: dict = {"zoom": None, "track_id": None, "surf": None}
-
-
-def _get_zoomed_track_surface(track, zoom: float) -> pygame.Surface:
-    key_zoom = round(zoom, 2)
-    key_tid = id(track)
-    if _scaled_track_cache["zoom"] != key_zoom or _scaled_track_cache["track_id"] != key_tid:
-        base = _get_track_surface(track)
-        if abs(key_zoom - 1.0) < 0.01:
-            surf = base
-        else:
-            tw, th = base.get_width(), base.get_height()
-            surf = pygame.transform.scale(base, (int(tw * key_zoom), int(th * key_zoom)))
-        _scaled_track_cache["zoom"] = key_zoom
-        _scaled_track_cache["track_id"] = key_tid
-        _scaled_track_cache["surf"] = surf
-    return _scaled_track_cache["surf"]
-
-
-def _draw_scene(
-    screen, track, car_px: float, car_py: float, zoom: float, car_heading: float
-) -> None:
-    """Draw track surface + car dot with zoom. At zoom=1 shows full track; zoom>1 follows car."""
-    if abs(zoom - 1.0) < 0.01:
-        screen.blit(_get_track_surface(track), (0, 0))
-        sx, sy = int(car_px), int(car_py)
-    else:
-        scaled = _get_zoomed_track_surface(track, zoom)
-        off_x = int(car_px * zoom - CANVAS_W / 2)
-        off_y = int(car_py * zoom - CANVAS_H / 2)
-        screen.blit(scaled, (-off_x, -off_y))
-        sx, sy = CANVAS_W // 2, CANVAS_H // 2
-
-    screen.blit(_get_glow_surf(), (sx - 15, sy - 15))
-    pygame.draw.circle(screen, (255, 50, 50), (sx, sy), 9)
-    pygame.draw.circle(screen, (255, 255, 255), (sx, sy), 9, 2)
-    hdx = int(sx + math.cos(car_heading) * 14)
-    hdy = int(sy - math.sin(car_heading) * 14)
-    pygame.draw.line(screen, (255, 220, 0), (sx, sy), (hdx, hdy), 2)
-
-
-def _draw_training(screen, fonts, track, car_state, stats, elapsed: float,
-                   zoom: float = 1.0, throttle_hist=None) -> None:
-    """Render the live training view: track + moving car dot + stats overlay."""
-    from f1_rl.track import meters_to_pixels, GRASS_COLOR
-
-    screen.fill(GRASS_COLOR)
-
-    if track is not None:
-        if car_state is not None:
-            x_m, y_m, heading, speed_ms, _thr = car_state
-            px, py = meters_to_pixels(track, x_m, y_m)
-            _draw_scene(screen, track, px, py, zoom, heading)
-        else:
-            screen.blit(_get_track_surface(track), (0, 0))
-    else:
-        f_title, f_lg, f_md, f_sm = fonts
-        msg = f_lg.render("Lädt Strecke ...", True, DIM)
-        screen.blit(msg, (CANVAS_W // 2 - msg.get_width() // 2, CANVAS_H // 2 - 20))
-
-    # ── Stats overlay (top-left) ─────────────────────────────────────────
-    f_title, f_lg, f_md, f_sm = fonts
-
-    global _stats_panel
-    if _stats_panel is None:
-        _stats_panel = pygame.Surface((260, 140), pygame.SRCALPHA)
-        _stats_panel.fill((0, 0, 0, 170))
-    screen.blit(_stats_panel, (8, 8))
-
-    dots = "." * (int(elapsed * 2) % 4)
-    screen.blit(f_md.render(f"Training{dots}", True, TEXT), (14, 14))
-
-    if stats:
-        ts = stats.get("timesteps", 0)
-        screen.blit(f_sm.render(f"Timesteps: {ts:,}", True, DIM), (14, 40))
-
-    if car_state is not None:
-        x_m, y_m, heading, speed_ms, _thr = car_state
-        screen.blit(f_sm.render(f"Speed:  {speed_ms * 3.6:.1f} km/h", True, DIM), (14, 58))
-
-    screen.blit(f_sm.render(f"Zoom:   {zoom:.1f}×  [Scroll / +/-]", True, DIM), (14, 76))
-    screen.blit(f_sm.render("ESC → Menü", True, (70, 70, 90)), (14, 110))
-
-    # ── Throttle/brake graph (bottom-right) ──────────────────────────────
-    if throttle_hist is not None:
-        from f1_rl.hud import draw_throttle_graph
-        draw_throttle_graph(screen, throttle_hist, x=CANVAS_W - 380, y=CANVAS_H - 170)
-
-
-def _run_visualization(screen, clock, fonts, model, track) -> str:
-    from collections import deque
-
-    from f1_rl.env import F1Env
-    from f1_rl.hud import draw_hud, draw_throttle_graph
-    from f1_rl.track import meters_to_pixels, GRASS_COLOR
-
-    f_title, f_lg, f_md, f_sm = fonts
-
-    env = F1Env(track=track, render_mode=None)
-    obs, _ = env.reset()
-    # Load persisted best lap for this circuit
-    best_laps = _load_best_laps()
-    best_lap: float | None = best_laps.get(track.name)
-    paused = False
-    zoom = 1.0
-    throttle_hist: deque[float] = deque(maxlen=120)
-
-    while True:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                return "quit"
-            if event.type == pygame.MOUSEWHEEL:
-                zoom = max(0.25, min(10.0, zoom * (1.15 ** event.y)))
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    return "quit"
-                if event.key == pygame.K_SPACE:
-                    paused = not paused
-                if event.key == pygame.K_r:
-                    obs, _ = env.reset()
-                if event.key == pygame.K_t:
-                    return "menu"
-                if event.key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS):
-                    zoom = min(10.0, zoom * 1.3)
-                if event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
-                    zoom = max(0.25, zoom / 1.3)
-                if event.key == pygame.K_0:
-                    zoom = 1.0
-
-        if not paused:
-            action, _ = model.predict(obs, deterministic=True)
-            obs, _, terminated, _, info = env.step(action)
-            throttle_hist.append(env._last_throttle)
-            if info.get("lap_complete"):
-                lap_time = time.time() - env.lap_start_time
-                if best_lap is None or lap_time < best_lap:
-                    best_lap = lap_time
-                    _save_best_lap(track.name, best_lap)
-                env.lap_start_time = time.time()
-            if terminated:
-                obs, _ = env.reset()
-
-        screen.fill(GRASS_COLOR)
-        car_px, car_py = meters_to_pixels(track, env.x_m, env.y_m)
-        _draw_scene(screen, track, car_px, car_py, zoom, env.heading)
-
-        draw_hud(screen, env.get_hud_state(), best_lap)
-        draw_throttle_graph(screen, throttle_hist, x=CANVAS_W - 380, y=CANVAS_H - 170)
-
-        if paused:
-            p = f_md.render("PAUSED  [SPACE]", True, (220, 220, 80))
-            screen.blit(p, (CANVAS_W // 2 - p.get_width() // 2, 20))
-
-        hint = f_sm.render(
-            f"[R] Reset   [T] Menü   [SPACE] Pause   [Scroll/+/-] Zoom {zoom:.1f}×   [0] Reset   [ESC] Quit",
-            True, (60, 60, 80),
-        )
-        screen.blit(hint, (CANVAS_W // 2 - hint.get_width() // 2, CANVAS_H - 20))
-
-        pygame.display.flip()
-        clock.tick(FPS)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 def main():
     pygame.init()
     screen = pygame.display.set_mode((CANVAS_W, CANVAS_H))
     pygame.display.set_caption("F1 RL Simulator")
     clock = pygame.time.Clock()
+    fonts = make_fonts()
 
-    fonts = (
-        _font("segoeui", 48, bold=True),
-        _font("segoeui", 28, bold=True),
-        _font("segoeui", 18),
-        _font("segoeui", 14),
-    )
+    # ── App state ─────────────────────────────────────────────────────────
+    state          = "menu"
+    sel_idx        = 0
+    hover_idx      = -1
+    zoom           = 1.0
+    active_param   = "steps"
+    scroll_offset  = 0
+    evolution_mode = EVOLUTION_MODE_DEFAULT
 
-    state = "menu"
-    sel_idx = 0
-    hover_idx = -1
+    steps_preset_idx = STEPS_PRESETS.index(5_000)
+    steps_value      = 5_000
+    typing_steps: str | None = None
+
+    gens_preset_idx = GENS_PRESETS.index(200)
+    gens_value      = 200
+    typing_gens: str | None = None
+
     training_thread: _TrainingThread | None = None
     training_start = 0.0
-    loaded_model = None
-    loaded_track = None
-    zoom = 1.0
+    loaded_model   = None
+    loaded_track   = None
+    train_state    = load_training_state()
 
-    from f1_rl.train import load_training_state
-    train_state = load_training_state()
-
-    # Shared queues for live training feedback
-    render_queue: queue.Queue = queue.Queue(maxsize=5)
-    stats_queue: queue.Queue = queue.Queue(maxsize=10)
-    car_state = None       # (x_m, y_m, heading, speed_ms, throttle)
-    last_stats: dict = {}
-
-    from collections import deque
+    render_queue: queue.Queue = queue.Queue(maxsize=4)
+    stats_queue:  queue.Queue = queue.Queue(maxsize=10)
+    car_states: list | None   = None
+    last_stats: dict          = {}
     training_throttle_hist: deque = deque(maxlen=120)
+    car_trail:              deque = deque(maxlen=60)
+    hover_score_idx: int          = -1
+    show_rays: bool               = False
+    show_scores: bool             = True
+    selected_car: int             = -1
+    best_car_marker_m: tuple | None = None
+    best_car_total_dist: float      = 0.0
 
-    item_h = 44
-    list_top = 175
+    replay     = ReplayState()
+    replay_list: list[dict] = []
+    replay_sel:  int        = 0
 
+    # ── Event loop ────────────────────────────────────────────────────────
     while True:
         mx, my = pygame.mouse.get_pos()
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
-                pygame.quit()
-                sys.exit()
+                pygame.quit(); sys.exit()
 
+            # ── Menu ──────────────────────────────────────────────────────
             if state == "menu":
                 if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE:
-                        pygame.quit()
-                        sys.exit()
-                    if event.key == pygame.K_DOWN:
-                        sel_idx = (sel_idx + 1) % len(CIRCUITS)
-                    if event.key == pygame.K_UP:
-                        sel_idx = (sel_idx - 1) % len(CIRCUITS)
-                    if event.key in (pygame.K_RETURN, pygame.K_r):
-                        resume = event.key == pygame.K_r and train_state is not None
-                        query, fallback, half_width = CIRCUITS[sel_idx]
-                        render_queue = queue.Queue(maxsize=5)
-                        stats_queue = queue.Queue(maxsize=10)
-                        car_state = None
-                        last_stats = {}
-                        zoom = 1.0
-                        training_throttle_hist.clear()
-                        training_thread = _TrainingThread(
-                            query, fallback, half_width, render_queue, stats_queue,
-                            resume=resume,
-                        )
-                        training_thread.start()
-                        training_start = time.time()
-                        state = "training"
-                    if event.key == pygame.K_l:
-                        if os.path.exists(MODEL_PATH):
-                            from stable_baselines3 import PPO
-                            from f1_rl.track import load_track
-                            query, fallback, half_width = CIRCUITS[sel_idx]
-                            print(f"[main] Loading track: {query}")
-                            loaded_track = load_track(query, geojson_fallback_path=fallback, half_width_m=half_width)
-                            print("[main] Loading model...")
-                            loaded_model = PPO.load(MODEL_PATH)
-                            state = "visualization"
-                        else:
-                            print("[main] No model found at", MODEL_PATH)
+                    if typing_steps is not None or typing_gens is not None:
+                        is_steps = typing_steps is not None
+                        typed    = typing_steps if is_steps else typing_gens
+                        if event.key == pygame.K_ESCAPE:
+                            if is_steps: typing_steps = None
+                            else:        typing_gens  = None
+                        elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                            if typed:
+                                val = max(1, int(typed))
+                                if is_steps:
+                                    steps_value      = val
+                                    steps_preset_idx = STEPS_PRESETS.index(val) if val in STEPS_PRESETS else -1
+                                else:
+                                    gens_value      = val
+                                    gens_preset_idx = GENS_PRESETS.index(val) if val in GENS_PRESETS else -1
+                            if is_steps: typing_steps = None
+                            else:        typing_gens  = None
+                        elif event.key == pygame.K_BACKSPACE:
+                            if is_steps: typing_steps = typed[:-1]
+                            else:        typing_gens  = typed[:-1]
+                        elif event.unicode.isdigit() and len(typed) < 9:
+                            if is_steps: typing_steps = typed + event.unicode
+                            else:        typing_gens  = typed + event.unicode
+                    else:
+                        if event.key == pygame.K_ESCAPE:
+                            pygame.quit(); sys.exit()
+                        if event.key == pygame.K_DOWN:
+                            sel_idx = (sel_idx + 1) % len(CIRCUITS)
+                        if event.key == pygame.K_UP:
+                            sel_idx = (sel_idx - 1) % len(CIRCUITS)
+                        if event.key == pygame.K_m:
+                            evolution_mode = "pack" if evolution_mode == "classic" else "classic"
+                        if event.key == pygame.K_TAB:
+                            active_param = "gens" if active_param == "steps" else "steps"
+                        if event.key == pygame.K_LEFT:
+                            if active_param == "steps":
+                                idx = steps_preset_idx if steps_preset_idx >= 0 else len(STEPS_PRESETS)
+                                steps_preset_idx = max(0, idx - 1)
+                                steps_value = STEPS_PRESETS[steps_preset_idx]
+                            else:
+                                idx = gens_preset_idx if gens_preset_idx >= 0 else len(GENS_PRESETS)
+                                gens_preset_idx = max(0, idx - 1)
+                                gens_value = GENS_PRESETS[gens_preset_idx]
+                        if event.key == pygame.K_RIGHT:
+                            if active_param == "steps":
+                                idx = steps_preset_idx if steps_preset_idx >= 0 else -1
+                                steps_preset_idx = min(len(STEPS_PRESETS) - 1, idx + 1)
+                                steps_value = STEPS_PRESETS[steps_preset_idx]
+                            else:
+                                idx = gens_preset_idx if gens_preset_idx >= 0 else -1
+                                gens_preset_idx = min(len(GENS_PRESETS) - 1, idx + 1)
+                                gens_value = GENS_PRESETS[gens_preset_idx]
+                        if event.unicode.isdigit():
+                            if active_param == "steps": typing_steps = event.unicode
+                            else:                       typing_gens  = event.unicode
+                        if event.key in (pygame.K_RETURN, pygame.K_r):
+                            resume = event.key == pygame.K_r and train_state is not None
+                            query, fallback, hw = CIRCUITS[sel_idx]
+                            render_queue        = queue.Queue(maxsize=4)
+                            stats_queue         = queue.Queue(maxsize=10)
+                            car_states          = None
+                            last_stats          = {}
+                            best_car_marker_m   = None
+                            best_car_total_dist = 0.0
+                            selected_car        = -1
+                            zoom                = 1.0
+                            training_throttle_hist.clear()
+                            car_trail.clear()
+                            training_thread = _TrainingThread(
+                                query, fallback, hw, render_queue, stats_queue,
+                                resume=resume,
+                                steps_per_gen=steps_value,
+                                total_gens=gens_value,
+                                evolution_mode=evolution_mode,
+                            )
+                            training_thread.start()
+                            training_start = time.time()
+                            state = "training"
+                        if event.key == pygame.K_l:
+                            if os.path.exists(QTABLE_PATH):
+                                from f1_rl.agent import NeuralAgent
+                                from f1_rl.track import load_track
+                                query, fallback, hw = CIRCUITS[sel_idx]
+                                loaded_track = load_track(query, geojson_fallback_path=fallback,
+                                                          half_width_m=hw)
+                                loaded_model = NeuralAgent.load(QTABLE_PATH)
+                                state = "visualization"
+                            else:
+                                print("[main] No Q-table found at", QTABLE_PATH)
+                        if event.key == pygame.K_p:
+                            replay_list = _load_replay_list()
+                            replay_sel  = 0
+                            state = "replays"
 
                 if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    for i in range(len(CIRCUITS)):
-                        r = pygame.Rect(CANVAS_W // 2 - 230, list_top + i * item_h, 460, item_h - 4)
+                    for row in range(MENU_VISIBLE):
+                        i = scroll_offset + row
+                        if i >= len(CIRCUITS):
+                            break
+                        r = pygame.Rect(MENU_LIST_X, MENU_LIST_TOP + row * MENU_ITEM_H,
+                                        MENU_LIST_W, MENU_ITEM_H - 4)
                         if r.collidepoint(mx, my):
                             sel_idx = i
 
+            # ── Training ──────────────────────────────────────────────────
             elif state == "training":
                 if event.type == pygame.MOUSEWHEEL:
                     zoom = max(0.25, min(10.0, zoom * (1.15 ** event.y)))
@@ -439,21 +389,137 @@ def main():
                         zoom = max(0.25, zoom / 1.3)
                     if event.key == pygame.K_0:
                         zoom = 1.0
+                    if event.key == pygame.K_v:
+                        show_rays = not show_rays
+                    if event.key == pygame.K_b:
+                        show_scores = not show_scores
+                    if event.key == pygame.K_c:
+                        selected_car = -1
+                    if event.unicode in "123456789":
+                        rank = int(event.unicode) - 1
+                        top_scores = last_stats.get("top_scores", []) if last_stats else []
+                        if rank < len(top_scores):
+                            _score, sgen = top_scores[rank]
+                            if _try_open_training_replay(sgen, replay):
+                                state = "training_replay"
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    top_scores = last_stats.get("top_scores", []) if last_stats else []
+                    panel_hit = False
+                    for rank in range(len(top_scores)):
+                        row_rect = pygame.Rect(
+                            TOP_PANEL_X0,
+                            TOP_PANEL_Y0 + TOP_ROW_FIRST_Y + rank * TOP_ROW_H,
+                            TOP_PANEL_W, TOP_ROW_H,
+                        )
+                        if row_rect.collidepoint(mx, my):
+                            panel_hit = True
+                            _score, sgen = top_scores[rank]
+                            if _try_open_training_replay(sgen, replay):
+                                state = "training_replay"
+                            break
+                    # Click a car to follow it (and show its score breakdown)
+                    if not panel_hit and car_states and training_thread and training_thread.track:
+                        _tr = training_thread.track
+                        focus = selected_car if 0 <= selected_car < len(car_states) else 0
+                        fpx, fpy = _meters_to_pixels(_tr, car_states[focus][0], car_states[focus][1])
+                        picked, best_d = -1, 22
+                        for i, ci in enumerate(car_states):
+                            cpx, cpy = _meters_to_pixels(_tr, ci[0], ci[1])
+                            sx, sy = _world_to_screen(cpx, cpy, fpx, fpy, zoom)
+                            d = ((sx - mx) ** 2 + (sy - my) ** 2) ** 0.5
+                            if d < best_d:
+                                best_d, picked = d, i
+                        selected_car = picked   # -1 if click missed all cars → clears
 
-        # Hover
+            # ── Replay browser ────────────────────────────────────────────
+            elif state == "replays":
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        state = "menu"
+                    if event.key == pygame.K_DOWN and replay_list:
+                        replay_sel = (replay_sel + 1) % len(replay_list)
+                    if event.key == pygame.K_UP and replay_list:
+                        replay_sel = (replay_sel - 1) % len(replay_list)
+                    if event.key == pygame.K_RETURN and replay_list:
+                        meta = replay_list[replay_sel]
+                        if _open_replay_file(meta["path"], meta, replay, return_state="replays"):
+                            state = "replay"
+
+            # ── Replay playback (shared by "replay" and "training_replay") ──
+            elif state in ("replay", "training_replay"):
+                if event.type == pygame.MOUSEWHEEL:
+                    replay.zoom = max(0.25, min(10.0, replay.zoom * (1.15 ** event.y)))
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    if event.button == 3:
+                        replay.dragging      = True
+                        replay.drag_start    = (mx, my)
+                        replay.drag_start_pan = (replay.pan_x, replay.pan_y)
+                    elif event.button == 1 and replay.frames is not None:
+                        bx, by, bw, bh = REPLAY_BAR_X, REPLAY_BAR_Y, REPLAY_BAR_W, REPLAY_BAR_H
+                        if bx <= mx <= bx + bw and by - 6 <= my <= by + bh + 6:
+                            frac = max(0.0, min(1.0, (mx - bx) / bw))
+                            replay.idx = int(frac * (len(replay.frames) - 1))
+                if event.type == pygame.MOUSEBUTTONUP:
+                    if event.button == 3:
+                        replay.dragging = False
+                if event.type == pygame.MOUSEMOTION and replay.dragging:
+                    replay.pan_x = replay.drag_start_pan[0] + (mx - replay.drag_start[0])
+                    replay.pan_y = replay.drag_start_pan[1] + (my - replay.drag_start[1])
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        replay.dragging = False
+                        state = replay.return_state
+                    if event.key == pygame.K_SPACE:
+                        replay.paused = not replay.paused
+                    if event.key == pygame.K_r:
+                        replay.idx = 0; replay.paused = False
+                    if event.key in (pygame.K_PLUS, pygame.K_EQUALS, pygame.K_KP_PLUS):
+                        replay.speed = min(8, replay.speed * 2)
+                    if event.key in (pygame.K_MINUS, pygame.K_KP_MINUS):
+                        replay.speed = max(1, replay.speed // 2)
+                    if event.key == pygame.K_0:
+                        replay.reset_view()
+                    if event.key == pygame.K_f:
+                        replay.reset_pan()
+
+        # ── Per-frame updates ─────────────────────────────────────────────
         if state == "menu":
+            # Keep selection within the scroll window
+            if sel_idx < scroll_offset:
+                scroll_offset = sel_idx
+            elif sel_idx >= scroll_offset + MENU_VISIBLE:
+                scroll_offset = sel_idx - MENU_VISIBLE + 1
+            scroll_offset = max(0, min(scroll_offset, max(0, len(CIRCUITS) - MENU_VISIBLE)))
+
             hover_idx = -1
-            for i in range(len(CIRCUITS)):
-                r = pygame.Rect(CANVAS_W // 2 - 230, list_top + i * item_h, 460, item_h - 4)
+            for row in range(MENU_VISIBLE):
+                i = scroll_offset + row
+                if i >= len(CIRCUITS):
+                    break
+                r = pygame.Rect(MENU_LIST_X, MENU_LIST_TOP + row * MENU_ITEM_H,
+                                MENU_LIST_W, MENU_ITEM_H - 4)
                 if r.collidepoint(mx, my):
                     hover_idx = i
 
-        # Drain queues
         if state == "training":
             try:
                 while True:
-                    car_state = render_queue.get_nowait()
-                    training_throttle_hist.append(car_state[4])
+                    car_states = render_queue.get_nowait()
+                    if car_states:
+                        training_throttle_hist.append(car_states[0][4])
+                        car_trail.append((car_states[0][0], car_states[0][1]))
+                        t_len = (training_thread.track.total_length_m
+                                 if training_thread and training_thread.track else 1.0)
+                        # Check ALL cars — the furthest one may not be rank-0.
+                        # Single-lap objective: cap the marker at one lap so the
+                        # "star" stops at the finish and is not collected again.
+                        for ci in car_states:
+                            prog     = ci[6]
+                            laps     = ci[7] if len(ci) > 7 else 0
+                            eff_dist = min(laps * t_len + prog, t_len)
+                            if eff_dist > best_car_total_dist:
+                                best_car_total_dist = eff_dist
+                                best_car_marker_m   = (ci[0], ci[1])
             except queue.Empty:
                 pass
             try:
@@ -461,43 +527,92 @@ def main():
                     last_stats = stats_queue.get_nowait()
             except queue.Empty:
                 pass
+            hover_score_idx = -1
+            top_scores = last_stats.get("top_scores", []) if last_stats else []
+            for rank in range(len(top_scores)):
+                row_rect = pygame.Rect(
+                    TOP_PANEL_X0,
+                    TOP_PANEL_Y0 + TOP_ROW_FIRST_Y + rank * TOP_ROW_H,
+                    TOP_PANEL_W, TOP_ROW_H,
+                )
+                if row_rect.collidepoint(mx, my):
+                    hover_score_idx = rank
+                    break
 
-        # State transitions
-        if state == "training" and training_thread and training_thread.done:
+        if state == "training_replay":
+            try:
+                while True: render_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                while True: last_stats = stats_queue.get_nowait()
+            except queue.Empty:
+                pass
+
+        if state in ("replay", "training_replay") and not replay.paused and replay.frames is not None:
+            for _ in range(replay.speed):
+                replay.idx = (replay.idx + 1) % len(replay.frames)
+
+        if state in ("training", "training_replay") and training_thread and training_thread.done:
             if training_thread.error:
                 print(f"[main] Training error: {training_thread.error}")
                 state = "menu"
             else:
                 loaded_model = training_thread.model
                 loaded_track = training_thread.track
+                car_states   = None
                 state = "visualization"
-            train_state = load_training_state()
+            train_state     = load_training_state()
             training_thread = None
 
-        # Rendering
+        # ── Render ────────────────────────────────────────────────────────
+        n_replays = len(glob.glob(os.path.join(REPLAY_DIR, "replay_*.npz")))
+
         if state == "menu":
-            _draw_menu(screen, fonts, sel_idx, hover_idx, train_state)
+            preview = _ensure_preview(sel_idx)
+            draw_menu(screen, fonts, sel_idx, hover_idx, train_state, n_replays,
+                      steps_preset_idx, steps_value, typing_steps,
+                      gens_preset_idx,  gens_value,  typing_gens,
+                      active_param, scroll_offset=scroll_offset,
+                      preview=preview, evolution_mode=evolution_mode)
 
         elif state == "training":
-            live_track = training_thread.track if training_thread else None
-            _draw_training(
-                screen, fonts,
-                track=live_track,
-                car_state=car_state,
-                stats=last_stats,
-                elapsed=time.time() - training_start,
-                zoom=zoom,
-                throttle_hist=training_throttle_hist,
+            live_track     = training_thread.track if training_thread else None
+            best_marker_px = None
+            if best_car_marker_m is not None and live_track is not None:
+                from f1_rl.track import meters_to_pixels as _m2px
+                best_marker_px = _m2px(live_track, best_car_marker_m[0], best_car_marker_m[1])
+            draw_training(
+                screen, fonts, track=live_track, car_states=car_states,
+                stats=last_stats, elapsed=time.time() - training_start,
+                zoom=zoom, throttle_hist=training_throttle_hist, car_trail=car_trail,
+                hover_score_idx=hover_score_idx, best_marker_px=best_marker_px,
+                show_rays=show_rays, swarm_mode=(evolution_mode == "pack"),
+                focus_idx=selected_car, show_scores=show_scores,
             )
 
         elif state == "visualization":
-            result = _run_visualization(screen, clock, fonts, loaded_model, loaded_track)
-            if result == "quit":
-                pygame.quit()
-                sys.exit()
-            else:
-                state = "menu"
-                continue
+            result = run_visualization(screen, clock, fonts, loaded_model, loaded_track,
+                                       _load_best_laps(), _save_best_lap)
+            state = "menu" if result != "quit" else None
+            if state is None:
+                pygame.quit(); sys.exit()
+            continue
+
+        elif state == "replays":
+            draw_replay_browser(screen, fonts, replay_list, replay_sel)
+
+        elif state in ("replay", "training_replay") and replay.frames is not None and replay.track is not None:
+            draw_replay(screen, fonts, replay.track, replay.frames,
+                        replay.idx, replay.meta, replay.paused, replay.speed, replay.zoom,
+                        pan_x=replay.pan_x, pan_y=replay.pan_y)
+            if state == "training_replay":
+                f_title, f_lg, f_md, f_sm = fonts
+                badge = f_sm.render(
+                    "TRAINING RUNNING IN BACKGROUND  [ESC] back to live view",
+                    True, (80, 200, 80),
+                )
+                screen.blit(badge, (CANVAS_W // 2 - badge.get_width() // 2, CANVAS_H - 40))
 
         pygame.display.flip()
         clock.tick(FPS)
