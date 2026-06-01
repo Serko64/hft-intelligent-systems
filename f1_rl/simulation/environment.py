@@ -53,6 +53,11 @@ RAY_ANGLES = tuple(math.radians(a) for a in (-75, -45, -20, 0, 20, 45, 75))
 _RAY_ANGLES_ARR = np.asarray(RAY_ANGLES, dtype=np.float64)
 MAX_RAY_M = 80.0         # normalisation range for raycast distances
 
+# When rays are disabled, the policy sees this constant in the 7 ray slots — a
+# fixed value carries no information, so the agent effectively trains "blind"
+# (no wall sensors). The observation stays 14-wide so models remain compatible.
+_NO_RAYS = (1.0,) * len(RAY_ANGLES)
+
 
 def _corridor_wall_segments(track: TrackData) -> tuple[np.ndarray, np.ndarray]:
     """Flatten the track corridor boundary into line segments (in metres).
@@ -80,10 +85,12 @@ def _corridor_wall_segments(track: TrackData) -> tuple[np.ndarray, np.ndarray]:
 class F1Env(gym.Env):
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
 
-    def __init__(self, track: TrackData, render_mode: str | None = None):
+    def __init__(self, track: TrackData, render_mode: str | None = None,
+                 use_rays: bool = True):
         super().__init__()
         self.track = track
         self.render_mode = render_mode
+        self.use_rays = use_rays   # False -> policy gets constant (blind) ray inputs
 
         self.observation_space = gym.spaces.Box(
             low=np.float32([-1.0] * 14),
@@ -318,6 +325,7 @@ class F1Env(gym.Env):
         dist_right = max(0.0, min(1.0, (hw - self._lateral) / hw))
         # Track-relative heading deviation: 0 = aligned with track, ±1 = pointing backwards
         hdg_diff = (self.heading - self._track_hdg + math.pi) % (2 * math.pi) - math.pi
+        rays = self._cast_rays() if self.use_rays else _NO_RAYS
         return np.array(
             [
                 max(-1.0, min(1.0, (self.x_m - cx) / hd)),
@@ -327,7 +335,7 @@ class F1Env(gym.Env):
                 self.progress / total if total > 0 else 0.0,
                 dist_left,
                 dist_right,
-                *self._cast_rays(),
+                *rays,
             ],
             dtype=np.float32,
         )

@@ -75,11 +75,12 @@ def _eval_step_budget(track) -> int:
     return int(min(EVAL_STEP_CAP, max(EVAL_STEPS, steps_for_lap)))
 
 
-def _record_replay(weights: np.ndarray, track, max_steps: int = 6000) -> np.ndarray:
+def _record_replay(weights: np.ndarray, track, max_steps: int = 6000,
+                   use_rays: bool = True) -> np.ndarray:
     from f1_rl.learning.agent import NeuralAgent
     from f1_rl.simulation.environment import F1Env
     agent = NeuralAgent(weights)
-    env   = F1Env(track=track, render_mode=None)
+    env   = F1Env(track=track, render_mode=None, use_rays=use_rays)
     obs, _ = env.reset()
     frames: list[tuple] = []
     for _ in range(max_steps):
@@ -94,10 +95,10 @@ def _record_replay(weights: np.ndarray, track, max_steps: int = 6000) -> np.ndar
 
 
 def _save_replay(weights: np.ndarray, track, fitness: float, gen: int,
-                 max_steps: int = 6000) -> None:
+                 max_steps: int = 6000, use_rays: bool = True) -> None:
     import glob as _glob
     os.makedirs(REPLAY_DIR, exist_ok=True)
-    frames = _record_replay(weights, track, max_steps=max_steps)
+    frames = _record_replay(weights, track, max_steps=max_steps, use_rays=use_rays)
     path = os.path.join(REPLAY_DIR, f"replay_g{gen:04d}.npz")
     np.savez_compressed(
         path,
@@ -127,7 +128,8 @@ def _save_replay(weights: np.ndarray, track, fitness: float, gen: int,
 # ── Display thread ────────────────────────────────────────────────────────────
 
 def _display_thread(pop_holder: list, stop_event: threading.Event,
-                    track, render_queue: Queue, pack_holder: list) -> None:
+                    track, render_queue: Queue, pack_holder: list,
+                    use_rays: bool = True) -> None:
     """Step the full population at ~60 fps, pushing a list of frames to render_queue.
 
     When a new generation arrives, each car is queued for a soft swap: it keeps
@@ -140,7 +142,7 @@ def _display_thread(pop_holder: list, stop_event: threading.Event,
 
     current_pop = pop_holder[0]
     n_cars      = len(current_pop)
-    envs        = [F1Env(track=track, render_mode=None) for _ in range(n_cars)]
+    envs        = [F1Env(track=track, render_mode=None, use_rays=use_rays) for _ in range(n_cars)]
     agents      = [NeuralAgent(w) for w in current_pop]
     obses       = [env.reset()[0] for env in envs]
 
@@ -214,6 +216,7 @@ def train(
     steps_per_gen: int = STEPS_PER_GEN,
     total_gens: int | None = None,
     evolution_mode: str = "classic",
+    use_rays: bool = True,
     cancel_event=None,
 ) -> tuple[object, object]:
     """Genetic DQN: N_POP parallel DDQN workers evolved by the GA each generation.
@@ -286,7 +289,7 @@ def train(
     if render_queue is not None:
         disp = threading.Thread(
             target=_display_thread,
-            args=(pop_holder, stop_event, track, render_queue, pack_holder),
+            args=(pop_holder, stop_event, track, render_queue, pack_holder, use_rays),
             daemon=True,
         )
         disp.start()
@@ -315,7 +318,7 @@ def train(
 
             results = list(executor.map(
                 run_worker,
-                [(w.copy(), track, steps_per_gen, epsilon, eval_steps) for w in population],
+                [(w.copy(), track, steps_per_gen, epsilon, eval_steps, use_rays) for w in population],
                 chunksize=1,
             ))
 
@@ -368,7 +371,7 @@ def train(
                 if len(top_10) > 10:
                     top_10.pop()
                 _save_replay(weights_out[0], track, fitnesses[0], gen,
-                             max_steps=eval_steps)
+                             max_steps=eval_steps, use_rays=use_rays)
 
             # ── Stagnation detection ──────────────────────────────────────
             if fitnesses[0] > prev_best_eval + 0.5:

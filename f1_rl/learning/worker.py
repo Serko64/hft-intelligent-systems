@@ -24,7 +24,7 @@ from f1_rl.config import (
 
 def run_worker(args: tuple) -> tuple[float, np.ndarray, float, float]:
     """Hybrid DDQN + GA worker. See module docstring."""
-    inherited_weights, track, n_steps, epsilon, eval_steps = args
+    inherited_weights, track, n_steps, epsilon, eval_steps, use_rays = args
 
     # ── Deferred imports (spawn-safe on Windows) ──────────────────────────
     import copy
@@ -66,7 +66,7 @@ def run_worker(args: tuple) -> tuple[float, np.ndarray, float, float]:
     buf_ptr  = 0
     buf_size = 0
 
-    env = F1Env(track=track, render_mode=None)
+    env = F1Env(track=track, render_mode=None, use_rays=use_rays)
     obs, _ = env.reset()
 
     # ── Training phase ────────────────────────────────────────────────────

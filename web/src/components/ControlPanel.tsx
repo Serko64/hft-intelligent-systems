@@ -27,6 +27,7 @@ export function ControlPanel({ connected, status, statusMessage, onSend, onCircu
   const [stepsIdx, setStepsIdx] = useState(4) // 5000
   const [gensIdx, setGensIdx] = useState(5) // 200
   const [pack, setPack] = useState(false)
+  const [useRays, setUseRays] = useState(true)
 
   const selectCircuit = (name: string) => {
     setCircuit(name)
@@ -56,6 +57,7 @@ export function ControlPanel({ connected, status, statusMessage, onSend, onCircu
       total_gens: gens,
       evolution_mode: pack ? "pack" : "classic",
       resume,
+      use_rays: useRays,
     })
 
   return (
@@ -127,6 +129,14 @@ export function ControlPanel({ connected, status, statusMessage, onSend, onCircu
           </Label>
         </div>
 
+        {/* Sensor rays */}
+        <div className="flex items-center gap-2">
+          <Checkbox id="rays" checked={useRays} onCheckedChange={(v) => setUseRays(Boolean(v))} />
+          <Label htmlFor="rays" className="cursor-pointer">
+            Sensor-Strahlen (Rays) nutzen
+          </Label>
+        </div>
+
         <Separator />
 
         {/* Actions */}
@@ -137,7 +147,7 @@ export function ControlPanel({ connected, status, statusMessage, onSend, onCircu
           <Button variant="secondary" disabled={!connected || !circuit} onClick={() => startTraining(true)}>
             Fortsetzen
           </Button>
-          <Button variant="secondary" disabled={!connected || !circuit} onClick={() => onSend({ type: "load_and_drive", circuit })}>
+          <Button variant="secondary" disabled={!connected || !circuit} onClick={() => onSend({ type: "load_and_drive", circuit, use_rays: useRays })}>
             Laden & Fahren
           </Button>
           <Button className="col-span-2" variant="destructive" disabled={!running} onClick={() => onSend({ type: "stop" })}>

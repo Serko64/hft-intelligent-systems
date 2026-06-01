@@ -61,6 +61,7 @@ export type ClientMsg =
       total_gens: number
       evolution_mode: "classic" | "pack"
       resume: boolean
+      use_rays: boolean
     }
-  | { type: "load_and_drive"; circuit: string }
+  | { type: "load_and_drive"; circuit: string; use_rays: boolean }
   | { type: "stop" }

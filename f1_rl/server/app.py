@@ -117,12 +117,13 @@ async def _handle(cmd: dict, ws: WebSocket) -> None:
             int(cmd.get("total_gens", 200)),
             cmd.get("evolution_mode", "classic"),
             bool(cmd.get("resume", False)),
+            use_rays=bool(cmd.get("use_rays", True)),
         )
         await _broadcast({"type": "track", **track_to_dict(session.track)})
         await _broadcast({"type": "status", "state": "training"})
     elif kind == "load_and_drive":
         try:
-            session.start_driving(cmd["circuit"])
+            session.start_driving(cmd["circuit"], use_rays=bool(cmd.get("use_rays", True)))
             await _broadcast({"type": "track", **track_to_dict(session.track)})
             await _broadcast({"type": "status", "state": "driving"})
         except Exception as e:       # noqa: BLE001

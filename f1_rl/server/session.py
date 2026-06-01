@@ -43,7 +43,7 @@ class Session:
 
     # ------------------------------------------------------------------
     def start_training(self, circuit: str, steps_per_gen: int, total_gens: int,
-                       evolution_mode: str, resume: bool) -> None:
+                       evolution_mode: str, resume: bool, use_rays: bool = True) -> None:
         self.stop()
         self._stop = threading.Event()
         self.track = self._load(circuit)
@@ -57,7 +57,8 @@ class Session:
             try:
                 train(track=self.track, render_queue=self.render_q, stats_queue=self.stats_q,
                       steps_per_gen=steps_per_gen, total_gens=total_gens,
-                      evolution_mode=evolution_mode, resume=resume, cancel_event=cancel)
+                      evolution_mode=evolution_mode, resume=resume,
+                      use_rays=use_rays, cancel_event=cancel)
             except Exception as e:               # noqa: BLE001
                 print(f"[server] training error: {e}")
             finally:
@@ -68,7 +69,7 @@ class Session:
         self._thread.start()
 
     # ------------------------------------------------------------------
-    def start_driving(self, circuit: str) -> None:
+    def start_driving(self, circuit: str, use_rays: bool = True) -> None:
         self.stop()
         self._stop = threading.Event()
         if not os.path.exists(MODEL_PATH):
@@ -85,7 +86,7 @@ class Session:
             from f1_rl.learning.agent import NeuralAgent
             from f1_rl.simulation.environment import F1Env
             agent = NeuralAgent.load(MODEL_PATH)
-            env = F1Env(track=track, render_mode=None)
+            env = F1Env(track=track, render_mode=None, use_rays=use_rays)
             obs, _ = env.reset()
             dt = 1.0 / 60.0
             while not stop.is_set():
