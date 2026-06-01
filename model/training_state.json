@@ -1,5 +1,8 @@
 {
-  "timesteps_done": 1100000,
-  "total_timesteps": 10000000,
-  "circuit": "Autodromo Nazionale Monza"
+  "timesteps_done": 10000000000,
+  "total_timesteps": 10000000000,
+  "circuit": "Autodromo Nazionale Monza",
+  "epsilon": 0.05,
+  "generation": 999,
+  "best_fitness": 144827.14024386296
 }

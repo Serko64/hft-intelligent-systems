@@ -9,7 +9,6 @@ CIRCUITS_DIR   = os.path.join(ROOT, "circuits")
 MODEL_DIR      = os.path.join(ROOT, "model")
 STATE_PATH     = os.path.join(MODEL_DIR, "training_state.json")
 MODEL_PATH     = os.path.join(MODEL_DIR, "model.npy")   # flat neural-net weights
-QTABLE_PATH    = MODEL_PATH                              # alias kept for compatibility
 REPLAY_DIR     = os.path.join(MODEL_DIR, "replays")
 BEST_LAPS_PATH = os.path.join(MODEL_DIR, "best_laps.json")
 

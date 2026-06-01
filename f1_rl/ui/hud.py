@@ -1,13 +1,10 @@
-"""HUD overlay rendering."""
+"""HUD overlay rendering (speed panel + throttle/brake graph)."""
 from __future__ import annotations
 
 import time
 from collections import deque
 
 _FONT_CACHE: dict = {}
-
-# Shared throttle history — filled by _run_visualization, read by draw_throttle_graph
-throttle_history: deque[float] = deque(maxlen=120)   # 2 s @ 60 fps
 
 
 def _font(name: str, size: int, bold: bool = False):

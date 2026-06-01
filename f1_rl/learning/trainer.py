@@ -1,4 +1,16 @@
-"""Genetic DQN trainer: population loop, display thread, replay I/O."""
+"""Genetic DQN trainer: the generation loop that ties DQN + GA together.
+
+Each generation:
+  1. Run N_POP workers in parallel — every worker does Double-DQN training on
+     its inherited weights, then plays one evaluation lap for a fitness score
+     (see worker.run_worker).
+  2. Sort by fitness, keep a hall-of-fame of elites, save replays of new bests.
+  3. Breed the next generation with the genetic operators (classic rank-based
+     selection, or pack/group selection).
+
+This module also handles persistence (checkpoints, training state) and the
+live display thread that animates the whole population for the UI.
+"""
 from __future__ import annotations
 
 import json
@@ -10,17 +22,16 @@ from queue import Full, Queue
 
 import numpy as np
 
-from .agent import NeuralAgent, n_params, random_weights
-from .config import (
+from f1_rl.config import (
     EPSILON_MIN, EPSILON_START, EXPLORE_FRAC,
     HALL_OF_FAME_K, MAX_REPLAYS, MIGRATION_RATE, MODEL_DIR, MODEL_PATH,
     MUTATION_NOISE, MUTATION_RATE,
     N_ACTIONS, N_BEST_CLONES, N_PACKS, N_POP, PACK_MIN_SURVIVORS, PACK_SUPPORT,
-    QTABLE_PATH, REPLAY_DIR, SAVE_EVERY,
+    REPLAY_DIR, SAVE_EVERY,
     STATE_PATH, STEPS_PER_GEN, STAGNATION_GENS,
 )
-from .genetics import (
-    _worker, assign_packs, breed_packs, crossover, mutate, rank_select,
+from f1_rl.learning.genetics import (
+    assign_packs, breed_packs, crossover, mutate, rank_select,
 )
 
 
@@ -59,14 +70,14 @@ def _eval_step_budget(track) -> int:
     would never register in fitness.  Estimate steps for one lap at an assumed avg
     speed, add a margin, and clamp between EVAL_STEPS and EVAL_STEP_CAP.
     """
-    from .config import EVAL_AVG_SPEED_MS, EVAL_STEP_BUFFER, EVAL_STEP_CAP, EVAL_STEPS
+    from f1_rl.config import EVAL_AVG_SPEED_MS, EVAL_STEP_BUFFER, EVAL_STEP_CAP, EVAL_STEPS
     steps_for_lap = track.total_length_m / EVAL_AVG_SPEED_MS * 60.0 * EVAL_STEP_BUFFER
     return int(min(EVAL_STEP_CAP, max(EVAL_STEPS, steps_for_lap)))
 
 
 def _record_replay(weights: np.ndarray, track, max_steps: int = 6000) -> np.ndarray:
-    from f1_rl.env import F1Env
-    from f1_rl.agent import NeuralAgent
+    from f1_rl.learning.agent import NeuralAgent
+    from f1_rl.simulation.environment import F1Env
     agent = NeuralAgent(weights)
     env   = F1Env(track=track, render_mode=None)
     obs, _ = env.reset()
@@ -124,8 +135,8 @@ def _display_thread(pop_holder: list, stop_event: threading.Event,
     new generation's weights on reset.  This lets ongoing runs finish before the
     transition, so there are no mass teleports and good runs are not cut short.
     """
-    from f1_rl.env import F1Env, REWARD_PARTS
-    from f1_rl.agent import NeuralAgent
+    from f1_rl.learning.agent import NeuralAgent
+    from f1_rl.simulation.environment import F1Env, REWARD_PARTS
 
     current_pop = pop_holder[0]
     n_cars      = len(current_pop)
@@ -203,13 +214,20 @@ def train(
     steps_per_gen: int = STEPS_PER_GEN,
     total_gens: int | None = None,
     evolution_mode: str = "classic",
-) -> tuple[NeuralAgent, object]:
+    cancel_event=None,
+) -> tuple[object, object]:
     """Genetic DQN: N_POP parallel DDQN workers evolved by the GA each generation.
 
     evolution_mode: "classic" = individual rank-based selection;
                     "pack"    = pack/group selection (weak DNA survives via its pack).
+    cancel_event: optional threading.Event — when set, training stops cleanly at
+                  the next generation boundary (a running generation finishes first).
     """
-    from f1_rl.track import load_track
+    # Imports that pull in torch are deferred to here so the menu/UI starts fast.
+    from f1_rl.learning.agent import NeuralAgent
+    from f1_rl.learning.network import n_params, random_weights
+    from f1_rl.learning.worker import run_worker
+    from f1_rl.simulation.track_loader import load_track
 
     os.makedirs(MODEL_DIR, exist_ok=True)
     if save_path is None:
@@ -225,8 +243,8 @@ def train(
 
     n_w = n_params()
     print(
-        f"[train] Genetic DQN  {N_POP} workers × {steps_per_gen} steps/gen × {total_gens} gens"
-        f"  ≈ {N_POP * steps_per_gen * total_gens:,} total env-steps"
+        f"[train] Genetic DQN  {N_POP} workers x {steps_per_gen} steps/gen x {total_gens} gens"
+        f"  ~ {N_POP * steps_per_gen * total_gens:,} total env-steps"
         f"  network params={n_w:,}  actions={N_ACTIONS}"
     )
 
@@ -285,6 +303,10 @@ def train(
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
         for gen in range(start_gen, start_gen + total_gens):
 
+            if cancel_event is not None and cancel_event.is_set():
+                print(f"[train] Stop requested — ending at generation {gen}")
+                break
+
             frac = (gen - start_gen) / total_gens
             epsilon = (
                 EPSILON_START - (EPSILON_START - EPSILON_MIN) * frac / EXPLORE_FRAC
@@ -292,7 +314,7 @@ def train(
             )
 
             results = list(executor.map(
-                _worker,
+                run_worker,
                 [(w.copy(), track, steps_per_gen, epsilon, eval_steps) for w in population],
                 chunksize=1,
             ))

@@ -1,4 +1,13 @@
-"""F1 gymnasium environment with kinematic vehicle physics."""
+"""F1 gymnasium environment with kinematic vehicle physics.
+
+This is a standard ``gymnasium.Env``:
+  - reset()  -> (observation, info)
+  - step(a)  -> (observation, reward, terminated, truncated, info)
+
+Observation: 14 floats in [-1, 1] (position, heading error, speed, progress,
+left/right distance, and 7 lidar-style rays). Action: one of 20 discrete
+(steering, throttle) combinations. See config.py for the index layout.
+"""
 from __future__ import annotations
 
 import math
@@ -8,15 +17,14 @@ import gymnasium as gym
 import numpy as np
 from shapely.geometry import Point
 
-from .config import LAP_BONUS
-from .track import TrackData, draw_track, meters_to_pixels
+from f1_rl.config import LAP_BONUS
+from f1_rl.simulation.track_loader import TrackData
 
 MAX_SPEED_MS = 80.0      # ~288 km/h
 STEER_GAIN = 0.15      # rad / (action * speed * dt)
 THROTTLE_GAIN = 8.0      # m/s² per unit throttle
 FRICTION = 0.98          # speed decay per step when coasting
 DT = 1.0 / 60.0
-HALF_WIDTH_M = 8.0
 
 DISCRETE_ACTIONS = [
     (s, t)
@@ -27,7 +35,7 @@ N_ACTIONS = len(DISCRETE_ACTIONS)          # 20
 DEFAULT_SPEED_MS  = 40.0 / 3.6            # 40 km/h starting speed
 MIN_DRIVE_SPEED_MS = 5.0 / 3.6           # hard floor — agents can never fully stop
 MIN_SPEED_MS = 20.0 / 3.6               # slow-speed penalty threshold
-SLOW_PENALTY = -2.0                      # penalty magnitude at MIN_DRIVE_SPEED
+SLOW_PENALTY = -15.0                      # penalty magnitude at MIN_DRIVE_SPEED
 N_CHECKPOINTS = 40                        # reward gates evenly spaced around the lap
 # Penalty per unit of steering CHANGE between consecutive steps. Punishes rapid
 # left/right flip-flopping (the visible jitter) while still allowing sustained
@@ -337,6 +345,9 @@ class F1Env(gym.Env):
     def render(self):
         import pygame
 
+        from f1_rl.simulation.track_loader import meters_to_pixels
+        from f1_rl.simulation.track_render import GRASS_COLOR, draw_track
+
         if self._surface is None:
             if not pygame.get_init():
                 pygame.init()
@@ -350,7 +361,6 @@ class F1Env(gym.Env):
             )
             self._clock = pygame.time.Clock()
 
-        from .track import GRASS_COLOR
         self._surface.fill(GRASS_COLOR)
         draw_track(self._surface, self.track)
 
