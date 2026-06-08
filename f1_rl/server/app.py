@@ -25,7 +25,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from f1_rl.config import CIRCUITS
-from f1_rl.server.protocol import car_to_dict, stats_to_dict, track_to_dict
+from f1_rl.server.protocol import (
+    car_to_dict, racing_line_to_dict, stats_to_dict, track_to_dict,
+)  # inspect dicts are built in the session/trainer and pumped through as-is
 from f1_rl.server.session import Session, _find_circuit
 
 session = Session()
@@ -75,6 +77,24 @@ async def _pump() -> None:
                 pass
             if stats is not None:
                 await _broadcast({"type": "stats", **stats_to_dict(stats)})
+        if session.line_q is not None:
+            line = None
+            try:
+                while True:
+                    line = session.line_q.get_nowait()
+            except Exception:        # noqa: BLE001
+                pass
+            if line is not None:
+                await _broadcast({"type": "racing_line", **racing_line_to_dict(line)})
+        if session.inspect_q is not None:
+            insp = None
+            try:
+                while True:
+                    insp = session.inspect_q.get_nowait()
+            except Exception:        # noqa: BLE001
+                pass
+            if insp is not None:
+                await _broadcast({"type": "inspect", **insp})
 
 
 @asynccontextmanager
@@ -118,6 +138,7 @@ async def _handle(cmd: dict, ws: WebSocket) -> None:
             cmd.get("evolution_mode", "classic"),
             bool(cmd.get("resume", False)),
             use_rays=bool(cmd.get("use_rays", True)),
+            auto_speed=bool(cmd.get("auto_speed", False)),
         )
         await _broadcast({"type": "track", **track_to_dict(session.track)})
         await _broadcast({"type": "status", "state": "training"})
@@ -128,6 +149,10 @@ async def _handle(cmd: dict, ws: WebSocket) -> None:
             await _broadcast({"type": "status", "state": "driving"})
         except Exception as e:       # noqa: BLE001
             await ws.send_json({"type": "status", "state": "idle", "message": str(e)})
+    elif kind == "set_speed":
+        session.set_speed(int(cmd.get("value", 1)))
+    elif kind == "inspect_car":
+        session.set_inspect(cmd.get("index"))
     elif kind == "stop":
         session.stop()
         await _broadcast({"type": "status", "state": "idle"})

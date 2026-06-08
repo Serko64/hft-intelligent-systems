@@ -1,48 +1,79 @@
 import * as THREE from "three"
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js"
-import type { Car, TrackMsg } from "@/lib/types"
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js"
+import type { Car, PolyRings, TrackMsg, Vec2 } from "@/lib/types"
 
 // ── Tweakables ────────────────────────────────────────────────────────────────
-const CAR_LENGTH_M = 8 // models are auto-scaled to roughly this length
-export const MODEL_YAW_OFFSET = 0 // rotate the car model if it faces the wrong way (e.g. Math.PI/2)
-const MODEL_PITCH = -Math.PI / 2 // lay a typical Y-up GLB flat into the XY ground plane
+const CAR_LENGTH_M = 5 // real F1 length; matches the training bbox (env CAR_LENGTH_M)
+export const MODEL_YAW_OFFSET = Math.PI/2 // rotate the car model if it faces the wrong way (e.g. Math.PI/2)
+const MODEL_PITCH = Math.PI /2 // lay a typical Y-up GLB flat onto the ground (z-up world)
 const MODEL_URL = "/models/f1.glb"
 
-const GRASS = 0x12260c
-const ASPHALT = 0x343338
-const WALL = 0xe1e1e1
+const GRASS = 0x2f6b22 // lively green so the dark track + red kerb pop
+const ASPHALT = 0x37352f // racing surface (FIA cross-section "Strecke")
+const WALL = 0xf4f4ee // bright white track-limit line
 const CENTERLINE = 0xffd200
+const KERB_RED = 0xc0392b
+const KERB_WHITE = 0xeeeeee
 
-/** Rank → colour, mirroring the pygame view (best = gold ... worst = dark red). */
-function rankColor(rank: number, total: number): THREE.Color {
+// Thin grey asphalt verge just outside the white line; the striped kerb is built
+// separately on top of it as an extruded strip (see buildEdgeStrip).
+const ZONE_STYLE: Record<string, { color: number; z: number }> = {
+  runoff: { color: 0x6e6c66, z: -0.4 }, // grey asphalt verge
+}
+
+/** Rank → colour (hex), mirroring the pygame view (best = gold ... worst = dark red). */
+function rankColorHex(rank: number, total: number): number {
   const f = total > 1 ? rank / (total - 1) : 0
-  if (f < 0.08) return new THREE.Color(0xffd700)
-  if (f < 0.2) return new THREE.Color(0x32dc50)
-  if (f < 0.5) return new THREE.Color(0xc88232)
-  return new THREE.Color(0x8a3a3a)
+  if (f < 0.08) return 0xffd700
+  if (f < 0.2) return 0x32dc50
+  if (f < 0.5) return 0xc88232
+  return 0x8a3a3a
+}
+
+/** Generation → a stable distinct colour (golden-ratio hue hashing). */
+function genColorHex(gen: number): number {
+  const hue = (gen * 0.6180339887) % 1
+  return new THREE.Color().setHSL(hue, 0.7, 0.55).getHex()
+}
+
+export type ColorMode = "rank" | "generation"
+
+interface ColorMat {
+  color: THREE.Color
 }
 
 interface CarObj {
   group: THREE.Group
-  marker: THREE.Mesh
+  bodyMaterials: ColorMat[] // materials tinted per-frame by rank
   hasModel: boolean
 }
 
+export type CarStyle = "model" | "box" // "box" = cheap primitive for performance
+
 /**
- * Renders the circuit and the live cars in a top-down orthographic view.
- * All coordinates are in metres (same as the simulation). The render loop reads
- * the latest cars via the `getCars` callback every frame, so React never needs
- * to re-render at 60 fps.
+ * Renders the circuit and the live cars in a freely-movable 3D view
+ * (PerspectiveCamera + OrbitControls: left-drag orbit, right-drag pan, wheel
+ * zoom). All coordinates are in metres (z is up). The render loop reads the
+ * latest cars via `getCars` each frame, so React never re-renders at 60 fps.
  */
 export class TrackScene {
   private renderer: THREE.WebGLRenderer
   private scene = new THREE.Scene()
-  private camera: THREE.OrthographicCamera
+  private camera: THREE.PerspectiveCamera
+  private controls: OrbitControls
   private trackGroup = new THREE.Group()
+  private racingLine: THREE.Mesh | null = null
   private carPool: CarObj[] = []
   private carScale = 1 // cars are scaled up on big circuits so they stay visible
+  private carStyle: CarStyle = "model" // "box" skips the GLB for performance
+  private colorMode: ColorMode = "rank"
+  private selectedIndex: number | null = null
+  private onCarSelect: ((i: number | null) => void) | null = null
+  private selectionRing: THREE.Mesh
+  private raycaster = new THREE.Raycaster()
+  private pointerDown: { x: number; y: number } | null = null
   private modelTemplate: THREE.Object3D | null = null
-  private bounds = { minx: -50, miny: -50, maxx: 50, maxy: 50 }
   private raf = 0
   private resizeObs: ResizeObserver
   private canvas: HTMLCanvasElement
@@ -51,20 +82,57 @@ export class TrackScene {
   constructor(canvas: HTMLCanvasElement, getCars: () => Car[]) {
     this.canvas = canvas
     this.getCars = getCars
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true })
+    // logarithmicDepthBuffer keeps depth precision usable across the huge
+    // near→far range (a few metres up to kilometre-wide circuits), which is what
+    // otherwise causes the stacked track layers to z-fight ("clip").
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     this.scene.background = new THREE.Color(GRASS)
     this.scene.add(this.trackGroup)
 
-    this.camera = new THREE.OrthographicCamera(-50, 50, 50, -50, 0.1, 2000)
-    this.camera.position.set(0, 0, 500)
-    this.camera.up.set(0, 1, 0)
-    this.camera.lookAt(0, 0, 0)
+    // z-up perspective camera, controllable with the mouse.
+    this.camera = new THREE.PerspectiveCamera(50, 1, 1, 500000)
+    this.camera.up.set(0, 0, 1)
+    this.camera.position.set(0, -200, 200)
 
-    this.scene.add(new THREE.AmbientLight(0xffffff, 1.1))
+    this.controls = new OrbitControls(this.camera, this.renderer.domElement)
+    this.controls.enableDamping = true
+    this.controls.dampingFactor = 0.12 // snappier than the old sluggish 0.08
+    this.controls.minDistance = 3 // zoom right up to a single car
+    this.controls.maxDistance = 200000
+    // Zoom toward the mouse cursor instead of the (often far-off) target, so you
+    // can dive straight onto a single car without the zoom "sticking" at min
+    // distance from the track centre.
+    this.controls.zoomToCursor = true
+    this.controls.zoomSpeed = 1.6
+    this.controls.panSpeed = 1.2
+    this.controls.rotateSpeed = 0.9
+    this.controls.screenSpacePanning = true // right-drag pans in view plane (intuitive)
+    // Keep the camera above the ground and just shy of the exact top-down pole,
+    // where orbiting otherwise flips/freezes (gimbal lock with a z-up camera).
+    this.controls.minPolarAngle = 0.08
+    this.controls.maxPolarAngle = Math.PI / 2 - 0.05
+    this.controls.target.set(0, 0, 0)
+
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.9))
+    this.scene.add(new THREE.HemisphereLight(0xbfd4ff, 0x202018, 0.6))
     const dir = new THREE.DirectionalLight(0xffffff, 1.4)
-    dir.position.set(0.4, 0.8, 1)
+    dir.position.set(0.4, 0.6, 1)
     this.scene.add(dir)
+
+    // Flat ring drawn under the selected car to highlight it.
+    this.selectionRing = new THREE.Mesh(
+      new THREE.RingGeometry(3.2, 4.2, 32),
+      new THREE.MeshBasicMaterial({ color: 0x39d0ff, transparent: true, opacity: 0.9, side: THREE.DoubleSide }),
+    )
+    this.selectionRing.visible = false
+    this.selectionRing.renderOrder = 11
+    this.scene.add(this.selectionRing)
+
+    // Click a car to select it (only when the pointer barely moved, so orbiting
+    // the camera doesn't trigger a selection).
+    this.canvas.addEventListener("pointerdown", this.onPointerDown)
+    this.canvas.addEventListener("pointerup", this.onPointerUp)
 
     this.resizeObs = new ResizeObserver(() => this.resize())
     this.resizeObs.observe(canvas)
@@ -89,49 +157,246 @@ export class TrackScene {
   // ── Track geometry ────────────────────────────────────────────────────────
   setTrack(track: TrackMsg) {
     this.trackGroup.clear()
-    this.bounds = track.bounds
 
-    // Asphalt: corridor exterior with the infield rings as holes.
-    const shape = new THREE.Shape(track.corridor_exterior.map(([x, y]) => new THREE.Vector2(x, y)))
-    for (const ring of track.corridor_interiors) {
-      shape.holes.push(new THREE.Path(ring.map(([x, y]) => new THREE.Vector2(x, y))))
-    }
-    const asphalt = new THREE.Mesh(
-      new THREE.ShapeGeometry(shape),
-      new THREE.MeshBasicMaterial({ color: ASPHALT }),
-    )
-    asphalt.position.z = -0.3
-    this.trackGroup.add(asphalt)
+    // Smoothed corridor rings (Chaikin) so jagged OSM polylines read as flowing
+    // racetrack curves. The same smoothed rings drive the kerb + white line so
+    // every layer lines up exactly.
+    const exterior = this.smooth(track.corridor_exterior)
+    const interiors = track.corridor_interiors.map((r) => this.smooth(r))
+    const rings = [exterior, ...interiors]
 
-    // White boundary lines (exterior + interiors).
-    const wallMat = new THREE.LineBasicMaterial({ color: WALL })
-    const rings = [track.corridor_exterior, ...track.corridor_interiors]
-    for (const ring of rings) {
-      const geo = new THREE.BufferGeometry().setFromPoints(
-        ring.map(([x, y]) => new THREE.Vector3(x, y, -0.2)),
-      )
-      this.trackGroup.add(new THREE.LineLoop(geo, wallMat))
+    // The track is built as stacked flat layers. Each gets a distinct render
+    // order + z so they never z-fight: grey verge (bottom) → striped kerb →
+    // asphalt → white line → centerline (top).
+    for (const zone of track.zones ?? []) {
+      const st = ZONE_STYLE[zone.name]
+      if (!st) continue
+      for (const poly of zone.polygons) this.trackGroup.add(this.fillPolygon(poly, st.color, st.z, 1))
     }
+
+    // Red/white striped kerb hugging the track edge, then the racing surface on
+    // top of it (covering the inner half of the strip), then a bold white line.
+    this.trackGroup.add(this.buildEdgeStrip(rings, 1.4, -0.3, { striped: true, stripeLen: 4, order: 2 }))
+
+    // Racing surface: corridor exterior with the infield rings as holes.
+    this.trackGroup.add(this.fillPolygon({ exterior, interiors }, ASPHALT, -0.2, 3))
+
+    // Bold white track-limit line, drawn as a thin band so it stays visible when
+    // zoomed out (a 1 px line would vanish).
+    this.trackGroup.add(this.buildEdgeStrip(rings, 0.6, -0.1, { color: WALL, order: 4 }))
 
     // Dashed yellow centerline.
     const clGeo = new THREE.BufferGeometry().setFromPoints(
-      track.centerline.map(([x, y]) => new THREE.Vector3(x, y, -0.1)),
+      this.smooth(track.centerline).map(([x, y]) => new THREE.Vector3(x, y, -0.05)),
     )
     const clMat = new THREE.LineDashedMaterial({ color: CENTERLINE, dashSize: 6, gapSize: 6 })
     const cl = new THREE.Line(clGeo, clMat)
     cl.computeLineDistances()
+    cl.renderOrder = 5
     this.trackGroup.add(cl)
 
-    // Scale cars relative to the circuit so they stay visible on huge tracks
-    // (an 8 m car on a 7 km track would otherwise be sub-pixel).
+    // Cars render at their true physical size (≈5 m), so they sit realistically
+    // on the 16 m-wide track instead of being inflated wider than the asphalt.
+    // On huge circuits a car is small from the framing angle — zoom in to see it.
+    const cx = (track.bounds.minx + track.bounds.maxx) / 2
+    const cy = (track.bounds.miny + track.bounds.maxy) / 2
     const span = Math.max(
       track.bounds.maxx - track.bounds.minx,
       track.bounds.maxy - track.bounds.miny,
     )
-    this.carScale = Math.max(8, span * 0.02) / CAR_LENGTH_M
-    for (const obj of this.carPool) obj.group.scale.setScalar(this.carScale)
+
+    // Frame the whole circuit from a tilted bird's-eye angle.
+    this.controls.target.set(cx, cy, 0)
+    this.camera.position.set(cx, cy - span * 0.55, span * 0.55)
+    this.controls.update()
 
     this.resize()
+  }
+
+  // ── Racing line ─────────────────────────────────────────────────────────────
+  /** Draw the best lap as a flat ribbon coloured by speed (red = slow corner,
+   *  green = fast straight). `points` are [x, y, speed] in metres / m·s⁻¹; vmin
+   *  and vmax fix the colour scale. Replaces any previously drawn line. */
+  setRacingLine(points: [number, number, number, number][], vmin: number, vmax: number) {
+    this.clearRacingLine()
+    if (points.length < 2) return
+
+    const span = Math.max(1e-6, vmax - vmin)
+    const half = 1.2 // ribbon half-width (m)
+    const positions: number[] = []
+    const colors: number[] = []
+    const colorAt = (speed: number) => {
+      const t = Math.min(1, Math.max(0, (speed - vmin) / span))
+      return new THREE.Color().setHSL(t * 0.33, 1, 0.5) // hue 0=red → 0.33=green
+    }
+
+    for (let i = 0; i < points.length - 1; i++) {
+      const [ax, ay, av] = points[i]
+      const [bx, by, bv] = points[i + 1]
+      let dx = bx - ax
+      let dy = by - ay
+      const len = Math.hypot(dx, dy) || 1
+      dx /= len
+      dy /= len
+      const nx = -dy * half // segment normal, scaled to half-width
+      const ny = dx * half
+      const ca = colorAt(av)
+      const cb = colorAt(bv)
+      // Two triangles forming the quad between point a and point b.
+      positions.push(ax + nx, ay + ny, 0, ax - nx, ay - ny, 0, bx - nx, by - ny, 0)
+      positions.push(ax + nx, ay + ny, 0, bx - nx, by - ny, 0, bx + nx, by + ny, 0)
+      colors.push(ca.r, ca.g, ca.b, ca.r, ca.g, ca.b, cb.r, cb.g, cb.b)
+      colors.push(ca.r, ca.g, ca.b, cb.r, cb.g, cb.b, cb.r, cb.g, cb.b)
+    }
+
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3))
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3))
+    const mesh = new THREE.Mesh(
+      geo,
+      new THREE.MeshBasicMaterial({
+        vertexColors: true,
+        polygonOffset: true,
+        polygonOffsetFactor: -10,
+        polygonOffsetUnits: -10,
+      }),
+    )
+    mesh.position.z = 0.08 // just above every track layer (which sit at z < 0)
+    mesh.renderOrder = 10
+    this.racingLine = mesh
+    this.scene.add(mesh)
+  }
+
+  clearRacingLine() {
+    if (!this.racingLine) return
+    this.scene.remove(this.racingLine)
+    this.racingLine.geometry.dispose()
+    ;(this.racingLine.material as THREE.Material).dispose()
+    this.racingLine = null
+  }
+
+  /** Build a flat filled polygon (with holes) at height z. `order` fixes the
+   *  paint order of the near-coplanar track layers and biases their depth via
+   *  polygonOffset, so higher layers always win cleanly instead of z-fighting. */
+  private fillPolygon(rings: PolyRings, color: number, z: number, order = 0): THREE.Mesh {
+    const shape = new THREE.Shape(rings.exterior.map(([x, y]) => new THREE.Vector2(x, y)))
+    for (const hole of rings.interiors) {
+      shape.holes.push(new THREE.Path(hole.map(([x, y]) => new THREE.Vector2(x, y))))
+    }
+    const mesh = new THREE.Mesh(
+      new THREE.ShapeGeometry(shape),
+      new THREE.MeshStandardMaterial({
+        color,
+        roughness: 1,
+        metalness: 0,
+        polygonOffset: true,
+        polygonOffsetFactor: -order,
+        polygonOffsetUnits: -order,
+      }),
+    )
+    mesh.position.z = z
+    mesh.renderOrder = order
+    return mesh
+  }
+
+  /** Chaikin corner-cutting: rounds off the angular OSM polylines into smooth
+   *  racetrack curves. Treated as a closed ring. Skipped for already-dense rings
+   *  (would explode the vertex count) or degenerate ones. */
+  private smooth(pts: Vec2[]): Vec2[] {
+    if (pts.length < 4 || pts.length > 160) return pts
+    let cur = pts
+    for (let it = 0; it < 2; it++) {
+      const out: Vec2[] = []
+      for (let i = 0; i < cur.length; i++) {
+        const a = cur[i]
+        const b = cur[(i + 1) % cur.length]
+        out.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25])
+        out.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75])
+      }
+      cur = out
+    }
+    return cur
+  }
+
+  /** Signed area of a closed ring (>0 ⇒ counter-clockwise winding). */
+  private static signedArea(ring: Vec2[]): number {
+    let a = 0
+    for (let i = 0; i < ring.length; i++) {
+      const [x1, y1] = ring[i]
+      const [x2, y2] = ring[(i + 1) % ring.length]
+      a += x1 * y2 - x2 * y1
+    }
+    return a / 2
+  }
+
+  /** Extrude each ring outward into a flat strip (a kerb or a track-limit line).
+   *  The offset direction is derived from the ring's winding (signed area), which
+   *  is correct for every segment even on twisty circuits — unlike a centroid
+   *  test, which flips on the far side of a winding track. The exterior ring
+   *  grows outward (away from the surface); interior rings grow into their hole.
+   *  With `striped`, quads alternate red/white by arc length (the F1 kerb). */
+  private buildEdgeStrip(
+    rings: Vec2[][],
+    width: number,
+    z: number,
+    opts: { striped?: boolean; stripeLen?: number; color?: number; order?: number },
+  ): THREE.Mesh {
+    const order = opts.order ?? 0
+    const positions: number[] = []
+    const colors: number[] = []
+    const red = new THREE.Color(KERB_RED)
+    const white = new THREE.Color(KERB_WHITE)
+    const solid = new THREE.Color(opts.color ?? KERB_WHITE)
+    const stripeLen = opts.stripeLen ?? 4
+
+    rings.forEach((ring, idx) => {
+      const isHole = idx > 0 // interior rings extrude into their hole
+      // For a CCW ring (area>0) the rotate-right normal (dy,-dx) points away from
+      // the enclosed area. Holes want the opposite (into the hole).
+      const sign = Math.sign(TrackScene.signedArea(ring)) * (isHole ? -1 : 1)
+      let arc = 0
+      for (let i = 0; i < ring.length; i++) {
+        const a = ring[i]
+        const b = ring[(i + 1) % ring.length]
+        const dx = b[0] - a[0]
+        const dy = b[1] - a[1]
+        const len = Math.hypot(dx, dy) || 1
+        const nx = (sign * dy) / len
+        const ny = (sign * -dx) / len
+        const ax2 = a[0] + nx * width
+        const ay2 = a[1] + ny * width
+        const bx2 = b[0] + nx * width
+        const by2 = b[1] + ny * width
+
+        // Two triangles: a, b, b2 and a, b2, a2.
+        positions.push(a[0], a[1], 0, b[0], b[1], 0, bx2, by2, 0)
+        positions.push(a[0], a[1], 0, bx2, by2, 0, ax2, ay2, 0)
+
+        const col = opts.striped
+          ? Math.floor(arc / stripeLen) % 2 === 0
+            ? red
+            : white
+          : solid
+        for (let v = 0; v < 6; v++) colors.push(col.r, col.g, col.b)
+        arc += len
+      }
+    })
+
+    const geo = new THREE.BufferGeometry()
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3))
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3))
+    const mesh = new THREE.Mesh(
+      geo,
+      new THREE.MeshBasicMaterial({
+        vertexColors: true,
+        polygonOffset: true,
+        polygonOffsetFactor: -order,
+        polygonOffsetUnits: -order,
+      }),
+    )
+    mesh.position.z = z
+    mesh.renderOrder = order
+    return mesh
   }
 
   // ── Per-frame update ────────────────────────────────────────────────────────
@@ -148,16 +413,92 @@ export class TrackScene {
       obj.group.visible = true
       obj.group.position.set(c.x, c.y, 0)
       obj.group.rotation.z = c.heading + (obj.hasModel ? MODEL_YAW_OFFSET : 0)
-      ;(obj.marker.material as THREE.MeshBasicMaterial).color = rankColor(i, cars.length)
+      const hex = this.colorMode === "generation"
+        ? genColorHex(c.generation)
+        : rankColorHex(i, cars.length)
+      for (const m of obj.bodyMaterials) m.color.setHex(hex)
     }
+
+    // Park the selection ring under the selected car (if any & still present).
+    const sel = this.selectedIndex
+    if (sel !== null && sel < cars.length) {
+      this.selectionRing.visible = true
+      this.selectionRing.position.set(cars[sel].x, cars[sel].y, 0.1)
+    } else {
+      this.selectionRing.visible = false
+    }
+
+    this.controls.update()
     this.renderer.render(this.scene, this.camera)
     this.raf = requestAnimationFrame(this.loop)
+  }
+
+  /** Switch car bodies between the full GLB model and a cheap box (performance).
+   *  Rebuilds the existing pool so the change is visible immediately. */
+  setCarStyle(style: CarStyle) {
+    if (style === this.carStyle) return
+    this.carStyle = style
+    for (const obj of this.carPool) {
+      this.scene.remove(obj.group)
+      obj.group.traverse((o) => {
+        const mesh = o as THREE.Mesh
+        if ((mesh as unknown as { isMesh?: boolean }).isMesh) {
+          mesh.geometry?.dispose()
+          const m = mesh.material
+          if (Array.isArray(m)) m.forEach((mm) => mm.dispose())
+          else m?.dispose()
+        }
+      })
+    }
+    this.carPool = []
+  }
+
+  setColorMode(mode: ColorMode) {
+    this.colorMode = mode
+  }
+
+  /** Register a callback fired when the user clicks a car (or empty space → null). */
+  setOnCarSelect(cb: (i: number | null) => void) {
+    this.onCarSelect = cb
+  }
+
+  /** Highlight a car by index (null clears the highlight). */
+  setSelected(i: number | null) {
+    this.selectedIndex = i
+  }
+
+  private onPointerDown = (e: PointerEvent) => {
+    this.pointerDown = { x: e.clientX, y: e.clientY }
+  }
+
+  private onPointerUp = (e: PointerEvent) => {
+    const down = this.pointerDown
+    this.pointerDown = null
+    if (!down) return
+    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return // a drag, not a click
+
+    const rect = this.canvas.getBoundingClientRect()
+    const ndc = new THREE.Vector2(
+      ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      -((e.clientY - rect.top) / rect.height) * 2 + 1,
+    )
+    this.raycaster.setFromCamera(ndc, this.camera)
+    const groups = this.carPool.map((o) => o.group)
+    const hits = this.raycaster.intersectObjects(groups, true)
+    let picked: number | null = null
+    if (hits.length) {
+      let o: THREE.Object3D | null = hits[0].object
+      while (o && !groups.includes(o as THREE.Group)) o = o.parent
+      if (o) picked = groups.indexOf(o as THREE.Group)
+    }
+    this.selectedIndex = picked
+    this.onCarSelect?.(picked)
   }
 
   private syncPool(n: number) {
     while (this.carPool.length < n) this.carPool.push(this.makeCar())
     // If the model finished loading after cars were created, upgrade the bodies.
-    if (this.modelTemplate) {
+    if (this.carStyle === "model" && this.modelTemplate) {
       for (const obj of this.carPool) {
         if (!obj.hasModel) this.upgradeToModel(obj)
       }
@@ -166,32 +507,39 @@ export class TrackScene {
 
   private makeCar(): CarObj {
     const group = new THREE.Group()
-
-    // Coloured disc under the car so rank is readable regardless of the model.
-    const marker = new THREE.Mesh(
-      new THREE.CircleGeometry(3.5, 24),
-      new THREE.MeshBasicMaterial({ color: 0xffffff }),
-    )
-    marker.position.z = 0.01
-    group.add(marker)
-
-    const obj: CarObj = { group, marker, hasModel: false }
-    if (this.modelTemplate) {
+    const obj: CarObj = { group, bodyMaterials: [], hasModel: false }
+    if (this.carStyle === "box") {
+      const box = this.makeBoxBody()
+      group.add(box)
+      obj.bodyMaterials = [box.material as unknown as ColorMat]
+    } else if (this.modelTemplate) {
       this.upgradeToModel(obj)
     } else {
-      group.add(this.makeFallbackBody())
+      const cone = this.makeFallbackBody()
+      group.add(cone)
+      obj.bodyMaterials = [cone.material as unknown as ColorMat]
     }
-
     group.scale.setScalar(this.carScale)
     this.scene.add(group)
     return obj
   }
 
+  private makeBoxBody(): THREE.Mesh {
+    // A flat box roughly the size of an F1 car, length along +X (heading 0).
+    const box = new THREE.Mesh(
+      new THREE.BoxGeometry(CAR_LENGTH_M, 2, 1),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.1, roughness: 0.6 }),
+    )
+    box.position.z = 0.5
+    box.name = "body"
+    return box
+  }
+
   private makeFallbackBody(): THREE.Mesh {
-    // A cone pointing +X (heading 0).
+    // A cone pointing +X (heading 0); its material is tinted by rank.
     const cone = new THREE.Mesh(
-      new THREE.ConeGeometry(2, CAR_LENGTH_M, 12),
-      new THREE.MeshStandardMaterial({ color: 0xdddddd, metalness: 0.1, roughness: 0.7 }),
+      new THREE.ConeGeometry(2, CAR_LENGTH_M, 16),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.1, roughness: 0.6 }),
     )
     cone.rotation.z = -Math.PI / 2
     cone.position.z = 0.6
@@ -203,58 +551,74 @@ export class TrackScene {
     if (!this.modelTemplate) return
     const old = obj.group.getObjectByName("body")
     if (old) obj.group.remove(old)
+
     const body = this.modelTemplate.clone(true)
     body.name = "body"
+
+    // Clone materials per car so each can be tinted to its own rank colour.
+    const mats: ColorMat[] = []
+    body.traverse((o) => {
+      const mesh = o as THREE.Mesh
+      if (!(mesh as unknown as { isMesh?: boolean }).isMesh) return
+      if (Array.isArray(mesh.material)) {
+        mesh.material = mesh.material.map((m) => m.clone())
+        for (const m of mesh.material) if ("color" in m) mats.push(m as unknown as ColorMat)
+      } else if (mesh.material) {
+        mesh.material = mesh.material.clone()
+        if ("color" in mesh.material) mats.push(mesh.material as unknown as ColorMat)
+      }
+    })
+
     obj.group.add(body)
+    obj.bodyMaterials = mats
     obj.hasModel = true
   }
 
-  /** Center a loaded model, scale it to ~CAR_LENGTH_M, and lay it flat. */
+  /** Center a loaded model, scale it to ~CAR_LENGTH_M, lay it flat, and set it
+   *  down so its lowest point rests on the ground (z = 0) instead of half-buried. */
   private normalizeModel(src: THREE.Object3D): THREE.Object3D {
     const wrapper = new THREE.Group()
     wrapper.add(src)
+
+    // Center the model on its own origin.
     const box = new THREE.Box3().setFromObject(src)
     const size = new THREE.Vector3()
     const center = new THREE.Vector3()
     box.getSize(size)
     box.getCenter(center)
     src.position.sub(center)
+
+    // Scale to a consistent length and lay flat (z-up world).
     const maxDim = Math.max(size.x, size.y, size.z) || 1
-    const s = CAR_LENGTH_M / maxDim
-    wrapper.scale.setScalar(s)
+    wrapper.scale.setScalar(CAR_LENGTH_M / maxDim)
     wrapper.rotation.x = MODEL_PITCH
+
+    // Lift so the bottom of the (rotated, scaled) model sits exactly on z = 0.
+    wrapper.updateMatrixWorld(true)
+    const lifted = new THREE.Box3().setFromObject(wrapper)
+    wrapper.position.z = -lifted.min.z
+
     return wrapper
   }
 
-  // ── Camera framing ──────────────────────────────────────────────────────────
+  // ── Camera / resize ─────────────────────────────────────────────────────────
   private resize() {
     const w = this.canvas.clientWidth || 1
     const h = this.canvas.clientHeight || 1
     this.renderer.setSize(w, h, false)
-
-    const pad = 1.08
-    const cx = (this.bounds.minx + this.bounds.maxx) / 2
-    const cy = (this.bounds.miny + this.bounds.maxy) / 2
-    const worldW = (this.bounds.maxx - this.bounds.minx) * pad || 100
-    const worldH = (this.bounds.maxy - this.bounds.miny) * pad || 100
-    const aspect = w / h
-    let halfW = worldW / 2
-    let halfH = worldH / 2
-    if (worldW / worldH > aspect) halfH = halfW / aspect
-    else halfW = halfH * aspect
-
-    this.camera.left = cx - halfW
-    this.camera.right = cx + halfW
-    this.camera.top = cy + halfH
-    this.camera.bottom = cy - halfH
-    this.camera.position.set(cx, cy, 500)
-    this.camera.lookAt(cx, cy, 0)
+    this.camera.aspect = w / h
     this.camera.updateProjectionMatrix()
   }
 
   dispose() {
+    this.clearRacingLine()
     cancelAnimationFrame(this.raf)
+    this.canvas.removeEventListener("pointerdown", this.onPointerDown)
+    this.canvas.removeEventListener("pointerup", this.onPointerUp)
+    this.selectionRing.geometry.dispose()
+    ;(this.selectionRing.material as THREE.Material).dispose()
     this.resizeObs.disconnect()
+    this.controls.dispose()
     this.renderer.dispose()
   }
 }

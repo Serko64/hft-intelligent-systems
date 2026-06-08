@@ -2,22 +2,49 @@
 front-end consumes over the WebSocket.
 
 All coordinates are in **metres** (the simulation's native units); the front-end
-handles scaling/centering for display. The frame `car` tuple layout matches what
-`trainer._display_thread` produces:
-
-    (x, y, heading, speed, throttle, checkpoint, progress, lap,
-     rays, pack_id, episode_reward, reward_parts)
+handles scaling/centering for display. Each car is a ``CarFrame`` (a NamedTuple
+defined in environment.py) — see its field list there.
 """
 from __future__ import annotations
 
-from f1_rl.simulation.environment import REWARD_PARTS
+from f1_rl.simulation.environment import REWARD_PARTS, CarFrame
+
+# Track-edge bands measured OUTWARD from the racing surface edge, in metres.
+# Kept deliberately THIN: large run-off buffers (15 m) merge across straights and
+# fill the infield on compact circuits, which looks like blobs rather than a
+# track. A slim red kerb + a narrow asphalt verge reads as a clean racetrack edge.
+_TRACK_ZONES = [
+    ("runoff", 4.0),
+]
+
+
+def _poly_rings(poly) -> dict:
+    return {
+        "exterior": [[float(x), float(y)] for x, y in poly.exterior.coords],
+        "interiors": [[[float(x), float(y)] for x, y in r.coords] for r in poly.interiors],
+    }
+
+
+def _geom_polys(geom) -> list:
+    return list(geom.geoms) if geom.geom_type == "MultiPolygon" else [geom]
 
 
 def track_to_dict(track) -> dict:
-    """Geometry the browser needs to draw the circuit once (centerline + walls)."""
+    """Geometry the browser needs to draw the circuit once: the racing surface,
+    plus the official run-off zones (kerb / asphalt run-off / gravel / barrier)
+    as outward buffers, so the edge looks like the real FIA cross-section."""
     corr = track.corridor
     poly = max(corr.geoms, key=lambda g: g.area) if corr.geom_type == "MultiPolygon" else corr
     minx, miny, maxx, maxy = corr.bounds
+
+    # Concentric run-off bands, outermost first (the front-end stacks them so each
+    # inner band sits on top, revealing the one beneath as a ring).
+    zones = []
+    for name, dist in _TRACK_ZONES:
+        band = corr.buffer(dist, join_style=1).simplify(0.5, preserve_topology=True)
+        zones.append({"name": name, "polygons": [_poly_rings(p) for p in _geom_polys(band)]})
+    zones.reverse()  # send outermost (barrier) first
+
     return {
         "name": track.name,
         "total_length_m": float(track.total_length_m),
@@ -27,24 +54,54 @@ def track_to_dict(track) -> dict:
         "corridor_interiors": [
             [[float(x), float(y)] for x, y in ring.coords] for ring in poly.interiors
         ],
+        "zones": zones,
         "bounds": {"minx": float(minx), "miny": float(miny),
                    "maxx": float(maxx), "maxy": float(maxy)},
     }
 
 
-def car_to_dict(c: tuple) -> dict:
-    """One car's per-frame state."""
-    d = {
-        "x": float(c[0]), "y": float(c[1]), "heading": float(c[2]),
-        "speed": float(c[3]), "throttle": float(c[4]),
-        "checkpoint": int(c[5]), "progress": float(c[6]), "lap": int(c[7]),
-        "rays": [float(r) for r in c[8]] if len(c) > 8 else [],
-        "pack": int(c[9]) if len(c) > 9 else 0,
-        "score": float(c[10]) if len(c) > 10 else 0.0,
+def car_to_dict(c: CarFrame) -> dict:
+    """One car's per-frame state, as JSON-ready primitives."""
+    return {
+        "x": float(c.x), "y": float(c.y), "heading": float(c.heading),
+        "speed": float(c.speed), "throttle": float(c.throttle),
+        "checkpoint": int(c.checkpoint), "progress": float(c.progress),
+        "lap": int(c.lap),
+        "rays": [float(r) for r in c.rays],
+        "pack": int(c.pack),
+        "score": float(c.score),
+        "reward_parts": {k: float(v) for k, v in zip(REWARD_PARTS, c.reward_parts)},
+        "generation": int(c.generation),
+        "a_long": float(c.a_long),
+        "a_lat": float(c.a_lat),
     }
-    if len(c) > 11:
-        d["reward_parts"] = {k: float(v) for k, v in zip(REWARD_PARTS, c[11])}
-    return d
+
+
+def racing_line_to_dict(points) -> dict:
+    """The best lap's path for the browser to draw, coloured by speed.
+
+    ``points`` is an iterable of (x, y, speed, throttle): metres / m·s⁻¹ / −1..1.
+    vmin/vmax (speed) are sent alongside so the front-end can map speed → colour
+    without a second pass; throttle drives the brake-vs-accel chart.
+    """
+    pts = [[float(x), float(y), float(v), float(thr)] for x, y, v, thr in points]
+    speeds = [p[2] for p in pts] or [0.0]
+    return {"points": pts, "vmin": min(speeds), "vmax": max(speeds)}
+
+
+def inspect_to_dict(index: int, obs, q, hidden, action: int) -> dict:
+    """One car's network state for the live net/Q-value visualisation.
+
+    obs = 14 inputs, q = 20 Q-values (the DQN "table" for this state), hidden =
+    per-layer post-ReLU activations, action = the greedy (chosen) action index.
+    """
+    return {
+        "index": int(index),
+        "obs": [float(v) for v in obs],
+        "q": [float(v) for v in q],
+        "hidden": [[float(v) for v in layer] for layer in hidden],
+        "action": int(action),
+    }
 
 
 def stats_to_dict(stats: dict) -> dict:

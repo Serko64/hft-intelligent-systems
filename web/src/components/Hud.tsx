@@ -1,4 +1,4 @@
-import { useEffect, useState, type MutableRefObject } from "react"
+import { memo, useEffect, useState, type MutableRefObject } from "react"
 import type { Car, StatsMsg } from "@/lib/types"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -12,7 +12,7 @@ interface Props {
  * Telemetry overlay. Reads the lead car from the frame ref at ~10 Hz (so it does
  * not re-render at the full 60 fps) and shows per-generation training stats.
  */
-export function Hud({ carsRef, stats }: Props) {
+function HudImpl({ carsRef, stats }: Props) {
   const [lead, setLead] = useState<Car | null>(null)
   const [count, setCount] = useState(0)
 
@@ -49,13 +49,30 @@ export function Hud({ carsRef, stats }: Props) {
           </>
         )}
 
-        <div className="mt-2 rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
-          Charts (Apache ECharts) folgen hier — Konfiguration wird separat ergänzt.
-        </div>
+        {stats && stats.top_scores.length > 0 && (
+          <div className="mt-2">
+            <div className="h-px bg-border my-1" />
+            <div className="mb-1 text-xs font-semibold text-muted-foreground">Top 10</div>
+            <ol className="space-y-0.5 text-xs">
+              {stats.top_scores.slice(0, 10).map(([score, gen], i) => (
+                <li key={`${gen}-${i}`} className="flex justify-between tabular-nums">
+                  <span className={i === 0 ? "font-semibold text-yellow-400" : "text-muted-foreground"}>
+                    {i + 1}. Gen {gen}
+                  </span>
+                  <span className={i === 0 ? "font-semibold text-yellow-400" : "font-medium"}>
+                    {score.toFixed(0)}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </div>
+        )}
       </CardContent>
     </Card>
   )
 }
+
+export const Hud = memo(HudImpl)
 
 function Row({ label, value }: { label: string; value: string }) {
   return (

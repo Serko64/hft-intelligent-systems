@@ -2,6 +2,16 @@
 
 export type Vec2 = [number, number]
 
+export interface PolyRings {
+  exterior: Vec2[]
+  interiors: Vec2[][]
+}
+
+export interface TrackZone {
+  name: string // "barrier" | "gravel" | "runoff" | "kerb"
+  polygons: PolyRings[]
+}
+
 export interface TrackMsg {
   type: "track"
   name: string
@@ -10,6 +20,7 @@ export interface TrackMsg {
   centerline: Vec2[]
   corridor_exterior: Vec2[]
   corridor_interiors: Vec2[][]
+  zones?: TrackZone[]
   bounds: { minx: number; miny: number; maxx: number; maxy: number }
 }
 
@@ -26,6 +37,9 @@ export interface Car {
   pack: number
   score: number
   reward_parts?: Record<string, number>
+  generation: number
+  a_long: number // longitudinal accel m/s² (+ = accelerating, − = braking)
+  a_lat: number // lateral/cornering accel m/s² (signed)
 }
 
 export interface FrameMsg {
@@ -50,7 +64,25 @@ export interface StatusMsg {
   message?: string
 }
 
-export type ServerMsg = TrackMsg | FrameMsg | StatsMsg | StatusMsg
+// The best lap's path. points = [x, y, speed, throttle] in metres / m·s⁻¹ / −1..1.
+export interface RacingLineMsg {
+  type: "racing_line"
+  points: [number, number, number, number][]
+  vmin: number
+  vmax: number
+}
+
+// One car's neural-net state for the net / Q-value visualisation.
+export interface InspectMsg {
+  type: "inspect"
+  index: number
+  obs: number[] // 14 inputs
+  q: number[] // 20 Q-values (the DQN "table" for this state)
+  hidden: number[][] // per-layer post-ReLU activations
+  action: number // greedy (chosen) action index
+}
+
+export type ServerMsg = TrackMsg | FrameMsg | StatsMsg | StatusMsg | RacingLineMsg | InspectMsg
 
 // Commands the client sends back.
 export type ClientMsg =
@@ -62,6 +94,9 @@ export type ClientMsg =
       evolution_mode: "classic" | "pack"
       resume: boolean
       use_rays: boolean
+      auto_speed: boolean
     }
   | { type: "load_and_drive"; circuit: string; use_rays: boolean }
+  | { type: "set_speed"; value: number }
+  | { type: "inspect_car"; index: number | null }
   | { type: "stop" }

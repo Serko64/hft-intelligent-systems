@@ -22,9 +22,14 @@ N_ACTIONS = 20   # must match len(DISCRETE_ACTIONS) in env.py
 
 # ── Neural network architecture ───────────────────────────────────────────────
 NET_HIDDEN = (128, 128)   # hidden layer widths; change to (256, 256) for harder circuits
+# Dropout probability on hidden layers (0.0 = off). Adds no weights, so model.npy
+# stays compatible. Only active during a worker's gradient phase — inference,
+# display and eval run with dropout OFF (net.eval()). Note: dropout in value-based
+# RL (DQN) is unusual and can destabilise learning; try a small value (~0.1).
+NET_DROPOUT = 0.0005
 
 # ── DQN (per-worker gradient training) ───────────────────────────────────────
-LR                 = 3e-4   # Adam learning rate
+LR                 = 3e-2   # Adam learning rate
 GAMMA              = 0.97   # discount factor
 REPLAY_CAPACITY    = 12_000 # transitions kept per worker (pre-allocated numpy)
 BATCH_SIZE         = 64     # mini-batch size on CPU
@@ -39,9 +44,9 @@ EPSILON_MIN   = 0.05
 EXPLORE_FRAC  = 0.3    # fraction of gens to anneal ε over
 
 # ── Genetic algorithm ─────────────────────────────────────────────────────────
-N_POP           = 40
-HALL_OF_FAME_K  = 8
-N_BEST_CLONES   = 4       # light-mutation copies of all-time best injected each gen
+N_POP           = 80
+HALL_OF_FAME_K  = 12
+N_BEST_CLONES   = 6       # light-mutation copies of all-time best injected each gen
 STEPS_PER_GEN   = 5_000   # env steps each worker runs per generation
 EVAL_STEPS      = 2_000   # floor for greedy evaluation steps (honest fitness signal)
 # The eval episode must be long enough for a car to actually complete a lap, otherwise
@@ -57,7 +62,16 @@ SAVE_EVERY      = 5
 MAX_REPLAYS     = 10
 
 # ── Reward shaping ─────────────────────────────────────────────────────────────
-LAP_BONUS       = 5_000.0  # reward for completing a full lap (episode then terminates)
+LAP_BONUS       = 5_000.0  # reward for completing a full lap
+
+# Curriculum (variant B): an episode runs several laps instead of ending after the
+# first. Lap 1 is graded only on "get round" (basic rewards); the optimisation
+# rewards (speed / slow / steer / time pressure) switch on once a car has completed
+# CURRICULUM_AFTER_LAP lap(s) — teach the lizard to survive before teaching the
+# human to be fast. The reward RULE is the same every generation, so fitness stays
+# comparable across the GA (no hall-of-fame reset needed).
+LAPS_PER_EPISODE     = 2   # episode ends after this many laps (or a crash)
+CURRICULUM_AFTER_LAP = 1   # optimisation rewards activate after this many laps done
 
 # ── Pack / swarm evolution ─────────────────────────────────────────────────────
 # "Rudel-Evolution": instead of pure individual survival-of-the-fittest, the
@@ -72,6 +86,17 @@ PACK_MIN_SURVIVORS = 1     # elites guaranteed to survive per pack (no abrupt ex
 # ── UI ────────────────────────────────────────────────────────────────────────
 CANVAS_W, CANVAS_H = 1600, 1000
 FPS = 60
+
+# Live-view speed: how many simulation sub-steps run per rendered frame. The view
+# still emits frames at 60 fps (smooth), but each frame advances the sim this many
+# steps, so the cars move faster and keep pace with how fast training progresses.
+# Adjustable live from the UI (1 = real time, higher = faster / livelier).
+SIM_SPEED_DEFAULT  = 3
+SIM_SPEED_MAX      = 20    # manual slider ceiling
+# Auto speed only needs to give smooth, lively motion — the hard generation sync is
+# now guaranteed by MAX_DISPLAY_LAG (cars snap to the latest gen). A lower cap keeps
+# the animation fluid instead of overloading the display thread with 80 cars.
+SIM_SPEED_AUTO_CAP = 12    # ceiling for the auto (generation-synced) speed
 
 CIRCUITS = [
     # query (osmnx geocode)              geojson fallback (optional)                     half-width m

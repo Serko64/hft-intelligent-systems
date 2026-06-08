@@ -20,17 +20,24 @@ import numpy as np
 import torch
 import torch.nn as nn
 
-from f1_rl.config import N_ACTIONS, N_OBS, NET_HIDDEN
+from f1_rl.config import N_ACTIONS, N_OBS, NET_DROPOUT, NET_HIDDEN
 
 
 def build_network() -> nn.Sequential:
-    """Create a fresh network: N_OBS -> *NET_HIDDEN -> N_ACTIONS, with ReLU between layers."""
+    """Create a fresh network: N_OBS -> *NET_HIDDEN -> N_ACTIONS, with ReLU between layers.
+
+    With config.NET_DROPOUT > 0, a Dropout layer follows each hidden ReLU. Dropout
+    has no parameters, so the flat weight vector (n_params) is unchanged and stays
+    compatible with existing model.npy files.
+    """
     sizes = [N_OBS, *NET_HIDDEN, N_ACTIONS]
     layers: list[nn.Module] = []
     for i in range(len(sizes) - 1):
         layers.append(nn.Linear(sizes[i], sizes[i + 1]))
         if i < len(sizes) - 2:           # no activation on the output layer
             layers.append(nn.ReLU())
+            if NET_DROPOUT > 0:
+                layers.append(nn.Dropout(NET_DROPOUT))
     return nn.Sequential(*layers)
 
 

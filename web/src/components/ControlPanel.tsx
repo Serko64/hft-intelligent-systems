@@ -19,15 +19,27 @@ interface Props {
   statusMessage?: string
   onSend: (cmd: ClientMsg) => void
   onCircuitChange?: (name: string) => void
+  boxMode: boolean
+  onBoxModeChange: (box: boolean) => void
+  colorByGen: boolean
+  onColorByGenChange: (g: boolean) => void
+  showCharts: boolean
+  onShowChartsChange: (s: boolean) => void
 }
 
-export function ControlPanel({ connected, status, statusMessage, onSend, onCircuitChange }: Props) {
+export function ControlPanel({
+  connected, status, statusMessage, onSend, onCircuitChange, boxMode, onBoxModeChange,
+  colorByGen, onColorByGenChange, showCharts, onShowChartsChange,
+}: Props) {
   const [circuits, setCircuits] = useState<string[]>([])
   const [circuit, setCircuit] = useState<string>("")
   const [stepsIdx, setStepsIdx] = useState(4) // 5000
   const [gensIdx, setGensIdx] = useState(5) // 200
   const [pack, setPack] = useState(false)
+  const [qtable, setQtable] = useState(false) // tabular Q-learning instead of the DQN
   const [useRays, setUseRays] = useState(true)
+  const [speed, setSpeed] = useState(3) // live-view sub-steps per frame (matches SIM_SPEED_DEFAULT)
+  const [autoSpeed, setAutoSpeed] = useState(true) // sync animation to generation compute time
 
   const selectCircuit = (name: string) => {
     setCircuit(name)
@@ -55,9 +67,10 @@ export function ControlPanel({ connected, status, statusMessage, onSend, onCircu
       circuit,
       steps_per_gen: steps,
       total_gens: gens,
-      evolution_mode: pack ? "pack" : "classic",
+      evolution_mode: qtable ? "qtable" : pack ? "pack" : "classic",
       resume,
       use_rays: useRays,
+      auto_speed: autoSpeed,
     })
 
   return (
@@ -121,11 +134,70 @@ export function ControlPanel({ connected, status, statusMessage, onSend, onCircu
           />
         </div>
 
-        {/* Pack mode */}
+        {/* Auto speed: sync the animation to how long a generation takes to compute */}
         <div className="flex items-center gap-2">
-          <Checkbox id="pack" checked={pack} onCheckedChange={(v) => setPack(Boolean(v))} />
-          <Label htmlFor="pack" className="cursor-pointer">
+          <Checkbox id="autospeed" checked={autoSpeed} onCheckedChange={(v) => setAutoSpeed(Boolean(v))} />
+          <Label htmlFor="autospeed" className="cursor-pointer">
+            Auto-Geschwindigkeit (Generation synchron)
+          </Label>
+        </div>
+
+        {/* Live-view speed (sub-steps per frame) — manual, disabled while auto is on */}
+        <div className="space-y-2">
+          <Label className="flex justify-between">
+            <span className={autoSpeed ? "text-muted-foreground/50" : ""}>Geschwindigkeit (live)</span>
+            <span className="text-muted-foreground tabular-nums">{autoSpeed ? "auto" : `${speed}×`}</span>
+          </Label>
+          <Slider
+            min={1}
+            max={20}
+            step={1}
+            value={[speed]}
+            disabled={autoSpeed}
+            onValueChange={(v) => {
+              setSpeed(v[0])
+              onSend({ type: "set_speed", value: v[0] })
+            }}
+          />
+        </div>
+
+        {/* Performance: cheap box instead of the full 3D model */}
+        <div className="flex items-center gap-2">
+          <Checkbox id="boxmode" checked={boxMode} onCheckedChange={(v) => onBoxModeChange(Boolean(v))} />
+          <Label htmlFor="boxmode" className="cursor-pointer">
+            Schnellmodus (Box statt 3D-Modell)
+          </Label>
+        </div>
+
+        {/* Colour cars by generation instead of rank */}
+        <div className="flex items-center gap-2">
+          <Checkbox id="colorgen" checked={colorByGen} onCheckedChange={(v) => onColorByGenChange(Boolean(v))} />
+          <Label htmlFor="colorgen" className="cursor-pointer">
+            Nach Generation einfärben
+          </Label>
+        </div>
+
+        {/* Show / hide the chart overlays */}
+        <div className="flex items-center gap-2">
+          <Checkbox id="charts" checked={showCharts} onCheckedChange={(v) => onShowChartsChange(Boolean(v))} />
+          <Label htmlFor="charts" className="cursor-pointer">
+            Charts anzeigen
+          </Label>
+        </div>
+
+        {/* Pack mode — only meaningful for the genetic DQN, so disabled in Q-table mode */}
+        <div className="flex items-center gap-2">
+          <Checkbox id="pack" checked={pack} disabled={qtable} onCheckedChange={(v) => setPack(Boolean(v))} />
+          <Label htmlFor="pack" className={`cursor-pointer ${qtable ? "text-muted-foreground/50" : ""}`}>
             Rudel-Evolution (Pack-Modus)
+          </Label>
+        </div>
+
+        {/* Q-table backend: classic tabular Q-learning, no neural network */}
+        <div className="flex items-center gap-2">
+          <Checkbox id="qtable" checked={qtable} onCheckedChange={(v) => setQtable(Boolean(v))} />
+          <Label htmlFor="qtable" className="cursor-pointer">
+            Q-Table (kein neuronales Netz)
           </Label>
         </div>
 
