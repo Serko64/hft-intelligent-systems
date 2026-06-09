@@ -221,6 +221,7 @@ export class TrackScene {
     this.clearRacingLine()
     if (points.length < 2) return
 
+    points = TrackScene.simplifyLine(points)
     const span = Math.max(1e-6, vmax - vmin)
     const half = 1.2 // ribbon half-width (m)
     const positions: number[] = []
@@ -265,6 +266,54 @@ export class TrackScene {
     mesh.renderOrder = 10
     this.racingLine = mesh
     this.scene.add(mesh)
+  }
+
+  /** Thin out the per‑frame racing line before it becomes geometry. A point is
+   *  kept only if dropping it would bend the ribbon (perp. distance > posEps
+   *  metres) or shift its speed colour (Δspeed > spdEps m/s). Long constant‑speed
+   *  straights collapse to two points, cutting the vertex count by an order of
+   *  magnitude with no visible change. Speed‑aware Douglas–Peucker (iterative). */
+  private static simplifyLine(
+    pts: [number, number, number, number][],
+    posEps = 0.6,
+    spdEps = 1.5,
+  ): [number, number, number, number][] {
+    if (pts.length < 3) return pts
+    const keep = new Uint8Array(pts.length)
+    keep[0] = keep[pts.length - 1] = 1
+    const spdScale = posEps / spdEps // express Δspeed as a position‑equivalent deviation
+    const stack: [number, number][] = [[0, pts.length - 1]]
+    while (stack.length) {
+      const [lo, hi] = stack.pop()!
+      if (hi - lo < 2) continue
+      const [ax, ay, av] = pts[lo]
+      const [bx, by, bv] = pts[hi]
+      let dx = bx - ax
+      let dy = by - ay
+      const len = Math.hypot(dx, dy) || 1
+      dx /= len
+      dy /= len
+      let worst = 0
+      let idx = -1
+      for (let i = lo + 1; i < hi; i++) {
+        const [px, py, pv] = pts[i]
+        const perp = Math.abs((px - ax) * -dy + (py - ay) * dx)
+        const t = ((px - ax) * dx + (py - ay) * dy) / len // 0..1 along the segment
+        const spd = Math.abs(pv - (av + (bv - av) * t)) * spdScale
+        const dev = Math.max(perp, spd)
+        if (dev > worst) {
+          worst = dev
+          idx = i
+        }
+      }
+      if (worst > posEps && idx >= 0) {
+        keep[idx] = 1
+        stack.push([lo, idx], [idx, hi])
+      }
+    }
+    const out: [number, number, number, number][] = []
+    for (let i = 0; i < pts.length; i++) if (keep[i]) out.push(pts[i])
+    return out
   }
 
   clearRacingLine() {

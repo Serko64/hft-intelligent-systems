@@ -45,6 +45,10 @@ EXPLORE_FRAC  = 0.3    # fraction of gens to anneal ε over
 
 # ── Genetic algorithm ─────────────────────────────────────────────────────────
 N_POP           = 80
+# Q-table backend population: tabular agents carry a sparse dict per individual
+# (more RAM than a flat weight vector), so a smaller population keeps the parallel
+# evaluation light while still giving the GA something to select/cross/mutate.
+QTABLE_N_POP    = 24
 HALL_OF_FAME_K  = 12
 N_BEST_CLONES   = 6       # light-mutation copies of all-time best injected each gen
 STEPS_PER_GEN   = 5_000   # env steps each worker runs per generation

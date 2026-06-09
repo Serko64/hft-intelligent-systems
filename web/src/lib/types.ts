@@ -82,7 +82,18 @@ export interface InspectMsg {
   action: number // greedy (chosen) action index
 }
 
-export type ServerMsg = TrackMsg | FrameMsg | StatsMsg | StatusMsg | RacingLineMsg | InspectMsg
+// The full learned Q-table of the inspected car (q-table backend only).
+// states[i] is a discretised state (bin indices), values[i] its N_ACTIONS Q-row.
+export interface QTableMsg {
+  type: "qtable"
+  index: number
+  states: number[][]
+  values: number[][]
+  feature_idx: number[]
+  n_bins: number
+}
+
+export type ServerMsg = TrackMsg | FrameMsg | StatsMsg | StatusMsg | RacingLineMsg | InspectMsg | QTableMsg
 
 // Commands the client sends back.
 export type ClientMsg =
@@ -91,7 +102,7 @@ export type ClientMsg =
       circuit: string
       steps_per_gen: number
       total_gens: number
-      evolution_mode: "classic" | "pack"
+      evolution_mode: "classic" | "pack" | "qtable"
       resume: boolean
       use_rays: boolean
       auto_speed: boolean

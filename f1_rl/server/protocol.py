@@ -104,6 +104,24 @@ def inspect_to_dict(index: int, obs, q, hidden, action: int) -> dict:
     }
 
 
+def qtable_to_dict(index: int, states, values, feature_idx, n_bins: int) -> dict:
+    """The full learned Q-table of the inspected car, for the heatmap view.
+
+    ``states`` is an iterable of discretised state keys (tuples of bin indices),
+    ``values`` the aligned Q-rows (one ``N_ACTIONS`` vector per state). ``feature_idx``
+    / ``n_bins`` describe the discretisation so the front-end can label the axes.
+    Pure (takes primitives only) — built by the q-table display thread, which holds
+    FEATURE_IDX / N_BINS — so there is no import cycle with learning.qtable.
+    """
+    return {
+        "index": int(index),
+        "states": [[int(b) for b in s] for s in states],
+        "values": [[float(v) for v in row] for row in values],
+        "feature_idx": [int(i) for i in feature_idx],
+        "n_bins": int(n_bins),
+    }
+
+
 def stats_to_dict(stats: dict) -> dict:
     """Slim, JSON-safe copy of the training stats (drops the heavy ghost array)."""
     return {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import type { Car, ClientMsg, InspectMsg, RacingLineMsg, ServerMsg, StatsMsg, TrackMsg } from "./types"
+import type { Car, ClientMsg, InspectMsg, QTableMsg, RacingLineMsg, ServerMsg, StatsMsg, TrackMsg } from "./types"
 
 /**
  * Manages the WebSocket connection to the backend.
@@ -21,6 +21,7 @@ export function useSimSocket() {
   const [statsHistory, setStatsHistory] = useState<StatsMsg[]>([])
   const [racingLine, setRacingLine] = useState<RacingLineMsg | null>(null)
   const [inspect, setInspect] = useState<InspectMsg | null>(null)
+  const [qtable, setQtable] = useState<QTableMsg | null>(null)
 
   useEffect(() => {
     let closed = false
@@ -63,6 +64,9 @@ export function useSimSocket() {
           case "inspect":
             setInspect(msg)
             break
+          case "qtable":
+            setQtable(msg)
+            break
           case "status":
             setStatus(msg.state)
             setStatusMessage(msg.message)
@@ -71,6 +75,7 @@ export function useSimSocket() {
             if (msg.state === "idle") {
               carsRef.current = []
               setInspect(null)
+              setQtable(null)
             }
             break
         }
@@ -90,5 +95,5 @@ export function useSimSocket() {
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(cmd))
   }, [])
 
-  return { connected, status, statusMessage, track, stats, statsHistory, racingLine, inspect, carsRef, send }
+  return { connected, status, statusMessage, track, stats, statsHistory, racingLine, inspect, qtable, carsRef, send }
 }

@@ -436,6 +436,7 @@ def train(
     evolution_mode: str = "classic",
     use_rays: bool = True,
     cancel_event=None,
+    table_queue: Queue | None = None,  # accepted & ignored (q-table backend only)
 ) -> tuple[object, object]:
     """Genetic DQN: N_POP parallel DDQN workers evolved by the GA each generation.
 

@@ -1,13 +1,15 @@
 import { useEffect, useState, type MutableRefObject } from "react"
 import { ResponsiveBar } from "@nivo/bar"
-import type { Car, InspectMsg } from "@/lib/types"
+import type { Car, InspectMsg, QTableMsg } from "@/lib/types"
 import { nivoDark } from "@/lib/nivoTheme"
 import { NetView, QValueChart } from "@/components/NetView"
+import { QTableHeatmap } from "@/components/QTableHeatmap"
 
 interface Props {
   carsRef: MutableRefObject<Car[]>
   index: number
   inspect: InspectMsg | null
+  qtable: QTableMsg | null
   onClose: () => void
 }
 
@@ -16,7 +18,7 @@ const G = 9.81
 /** Inspector for one clicked car: live stats, score breakdown and the forces
  *  currently acting on it (a small top-down view). Reads the car from the frame
  *  ref at ~10 Hz so it doesn't re-render every frame. */
-export function CarInspector({ carsRef, index, inspect, onClose }: Props) {
+export function CarInspector({ carsRef, index, inspect, qtable, onClose }: Props) {
   const [car, setCar] = useState<Car | null>(null)
   const [showNet, setShowNet] = useState(false)
 
@@ -33,6 +35,10 @@ export function CarInspector({ carsRef, index, inspect, onClose }: Props) {
       </div>
     )
   }
+
+  // Q-table message for *this* car (q-table backend); null in DQN mode.
+  const qtableForThis = qtable && qtable.index === index ? qtable : null
+  const isQtable = qtableForThis !== null
 
   const parts = car.reward_parts ?? {}
   const barData = Object.entries(parts)
@@ -83,18 +89,23 @@ export function CarInspector({ carsRef, index, inspect, onClose }: Props) {
         )}
       </div>
 
-      {/* Neural net + Q-value visualisation (streamed only while inspected). */}
+      {/* Net/Q (DQN) or Q-table heatmap (q-table mode) — streamed only while inspected. */}
       <div>
         <button
           className="flex w-full items-center justify-between text-xs font-semibold text-muted-foreground hover:text-foreground"
           onClick={() => setShowNet((s) => !s)}
         >
-          <span>Neuronales Netz & Q-Werte</span>
+          <span>{isQtable ? "Q-Tabelle & Q-Werte" : "Neuronales Netz & Q-Werte"}</span>
           <span>{showNet ? "▲" : "▼"}</span>
         </button>
         {showNet && (
           <div className="mt-2 space-y-3">
-            {inspect && inspect.index === index ? (
+            {isQtable ? (
+              <>
+                {inspect && inspect.index === index && <QValueChart insp={inspect} />}
+                <QTableHeatmap table={qtableForThis} />
+              </>
+            ) : inspect && inspect.index === index ? (
               <>
                 <QValueChart insp={inspect} />
                 <NetView insp={inspect} />

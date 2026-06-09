@@ -95,6 +95,15 @@ async def _pump() -> None:
                 pass
             if insp is not None:
                 await _broadcast({"type": "inspect", **insp})
+        if session.table_q is not None:
+            tbl = None
+            try:
+                while True:
+                    tbl = session.table_q.get_nowait()
+            except Exception:        # noqa: BLE001
+                pass
+            if tbl is not None:
+                await _broadcast({"type": "qtable", **tbl})
 
 
 @asynccontextmanager

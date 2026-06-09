@@ -11,7 +11,7 @@ import type { TrackMsg } from "@/lib/types"
 import type { CarStyle, ColorMode } from "@/three/TrackScene"
 
 export default function App() {
-  const { connected, status, statusMessage, track, stats, statsHistory, racingLine, inspect, carsRef, send } =
+  const { connected, status, statusMessage, track, stats, statsHistory, racingLine, inspect, qtable, carsRef, send } =
     useSimSocket()
 
   // Car rendering style: full 3D model, or a cheap box for performance.
@@ -95,6 +95,7 @@ export default function App() {
                     carsRef={carsRef}
                     index={selectedCar}
                     inspect={inspect}
+                    qtable={qtable}
                     onClose={() => setSelectedCar(null)}
                   />
                 </CardContent>

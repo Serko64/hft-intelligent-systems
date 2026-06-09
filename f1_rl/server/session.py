@@ -31,6 +31,7 @@ class Session:
         self.stats_q: queue.Queue | None = None
         self.line_q: queue.Queue | None = None   # best-lap racing line (x, y, speed)
         self.inspect_q: queue.Queue | None = None  # selected car's net/Q-value state
+        self.table_q: queue.Queue | None = None  # selected car's full Q-table (q-table mode)
         # Live-adjustable sim sub-steps per frame (shared with the sim threads via
         # a 1-element list so changes take effect without restarting the run).
         self.speed_holder: list[int] = [SIM_SPEED_DEFAULT]
@@ -67,6 +68,8 @@ class Session:
         self.stats_q = queue.Queue(maxsize=10)
         self.line_q = queue.Queue(maxsize=2)
         self.inspect_q = queue.Queue(maxsize=2)
+        # Only the q-table backend streams a full table; the DQN trainer ignores it.
+        self.table_q = queue.Queue(maxsize=2) if evolution_mode == "qtable" else None
         self.mode = "training"
         cancel = self._stop
 
@@ -75,7 +78,7 @@ class Session:
             # Q-learning); everything else uses the genetic DQN trainer. Both share
             # the same signature, so the rest of the call is identical.
             if evolution_mode == "qtable":
-                from f1_rl.learning.qtable import train_qtable as train
+                from f1_rl.learning.qtable import q_learning_loop as train
             else:
                 from f1_rl.learning.trainer import train
             try:
@@ -85,7 +88,7 @@ class Session:
                       auto_speed=auto_speed,
                       steps_per_gen=steps_per_gen, total_gens=total_gens,
                       evolution_mode=evolution_mode, resume=resume,
-                      use_rays=use_rays, cancel_event=cancel)
+                      use_rays=use_rays, cancel_event=cancel, table_queue=self.table_q)
             except Exception as e:               # noqa: BLE001
                 print(f"[server] training error: {e}")
             finally:
@@ -106,6 +109,7 @@ class Session:
         self.stats_q = None
         self.line_q = queue.Queue(maxsize=2)
         self.inspect_q = queue.Queue(maxsize=2)
+        self.table_q = None
         self.mode = "driving"
         stop = self._stop
         track = self.track
