@@ -1,67 +1,6 @@
-"""Klassisches tabellarisches Q-Learning — die Variante OHNE neuronales Netz.
-
-Diese Datei setzt das Q-Learning der Vorlesung direkt um. Der Code bleibt
-unverändert lauffähig; die Benennung ist auf die Folien-Begriffe abgebildet.
-Funktionen wurden NICHT umbenannt — der Folien-Begriff steht jeweils als
-Kommentar (mit Vorschlag für den englischen Bezeichner zum späteren Refactor).
-
-Begriffs-Mapping  Folie  ->  Code
----------------------------------
-    Agent                     (Folie 3)   diese Datei: wählt Aktionen, lernt die Q-Tabelle
-    Umgebung (Environment)    (Folie 4)   F1Env aus environment.py
-    Zustand  s ∈ S            (Folie 4)   diskretisierter Beobachtungsvektor -> state key
-    Aktion   a ∈ A            (Folie 3)   Aktionsindex 0..N_ACTIONS-1
-    Reward   r = R(s,a)       (Folie 17)  reward aus env.step(...)
-    Folgezustand s' = T(s,a)  (Folie 10)  next_state
-    Q-Funktion Q(s,a)         (Folie 24)  erwarteter (abgezinster) Total Reward
-    Q-Tabelle                 (Folie 25)  dict: Zustand -> Vektor mit |A| Q-Werten
-    Policy  π(s)=argmax Q     (Folie 28)  greedy / argmax über die Zustands-Zeile
-    Discount-Faktor γ         (Folie 22)  GAMMA (aus config.py)
-    Lernrate α                (Folie 38)  ALPHA
-    Temporal-Difference-Update(Folie 38)  update(...)
-    Fehler Δ (TD-Fehler)      (Folie 37)  (target - row[a])
-    Episode / Lernschleife    (Folie 40)  q_learning_loop(...)
-    Zielzustand s_goal        (Folie 44)  done == True (terminated)
-
-Zwei bewusste Abweichungen von der Folie-40-Pseudo-Schleife (beide praktisch nötig):
-  * Folie 40 wählt in Schritt 1 rein greedy; hier wird ε-greedy gewählt, also mit
-    Exploration. Das ist die Voraussetzung aus Folie 41 ("jeder Zustand muss
-    (unendlich) oft besucht werden").
-  * Folie 40 initialisiert die Q-Tabelle "zufallsbasiert"; hier mit Nullen
-    (entsteht lazy beim ersten Zugriff). Funktioniert für dieses Reward-Design.
-
-Es ist ein Drop-in-Ersatz für den Deep-Learning-Stack (network.py + agent.py +
-worker.py + trainer.py): gleiche Umgebung, gleiches WebSocket-Protokoll, gleiche
-Live-Ansicht — aber die Policy ist eine Wertetabelle statt eines MLP.
-
-Warum die Tabelle Zusatzarbeit braucht
---------------------------------------
-Eine echte Q-Tabelle ist ``Q[Zustand][Aktion]`` und braucht *diskrete* Zustände.
-Die Umgebung liefert 14 kontinuierliche Floats in [-1, 1] (environment._get_obs).
-Alle 14 mit echter Auflösung ergäben N_BINS**14 Zustände (Fluch der Dimensionalität,
-vgl. Folie 41: "in der Praxis oft sehr große Tabellen, nicht berechenbar"). Daher:
-
-  1. fahrrelevante Merkmale wählen (heading error, speed, die 7 Lidar-Strahlen),
-  2. jedes in N_BINS Stufen diskretisieren  ->  kurzer, hashbarer Zustands-Key,
-  3. Q-Werte in einem sparse dict halten (nur besuchte Zustände kosten Speicher).
-
-Öffentliche Schnittstelle (spiegelt learning/agent.py):
-  bin_values_for_qtable(obs)           -> Zustands-Key (Folie 4 / 43)
-  q_values(table, state)               -> die 20 Q-Werte eines Zustands (Folie 25)
-  greedy_highest_q_action_for_state    -> beste Aktion = Policy (Folie 28)
-  epsilon_greedy(...)                  -> Exploration/Exploitation (Folie 41)
-  update(table, s, a, r, ...)          -> Temporal-Difference-Update (Folie 38)
-  save_table / load_qtable             -> Persistenz
-  act(table, obs)                      -> greedy Aktion = Policy anwenden (Folie 28)
-  forward_trace(table, obs)            -> (q_values, hidden) fürs Inspect-Panel
-  q_learning_loop(...)                 -> Lernschleife "FOR EACH Episode" (Folie 40)
-
-Wird etwas davon woanders gebraucht? Importieren — nicht neu implementieren.
-"""
 from __future__ import annotations
 
 import json
-import math
 import os
 import threading
 import time
@@ -71,76 +10,51 @@ from queue import Full, Queue
 import numpy as np
 
 from f1_rl.config import (
-    EPSILON_MIN, EPSILON_START, EXPLORE_FRAC, GAMMA,
-    HALL_OF_FAME_K, MODEL_DIR, MUTATION_NOISE, MUTATION_RATE,
-    N_BEST_CLONES, QTABLE_N_POP, SAVE_EVERY, SIM_SPEED_AUTO_CAP,
+    EPSILON_MIN, GAMMA, MIGRATION_RATE, MODEL_DIR, MUTATION_NOISE, MUTATION_RATE,
+    N_BEST_CLONES, N_PACKS, PACK_MIN_SURVIVORS, PACK_SUPPORT, QTABLE_N_POP, SAVE_EVERY,
     STAGNATION_GENS, STEPS_PER_GEN,
 )
-from f1_rl.learning.genetics import rank_select
+from f1_rl.learning.genetics import assign_packs, rank_select
 from f1_rl.simulation.environment import N_ACTIONS
 
-# ── Konfiguration der Q-Tabelle (das hier IST die ganze "Architektur") ─────────
-# Welche der 14 Beobachtungs-Slots den ZUSTAND s bilden (Folie 4). Alle 14 mit echter
-# Auflösung sind aussichtslos (Fluch der Dimensionalität: N_BINS**14 Zustände, Folie 41),
-# daher fallen die schwachen Positions-/Progress-Signale weg, behalten wird, was lenkt:
-#   [2] heading error,  [3] speed,  [7..13] die 7 Lidar-Strahlen.
+# Features die gebinned werden sollen (ihre indexe)
 FEATURE_IDX  = np.array([2, 3, 7, 8, 9, 10, 11, 12, 13], dtype=np.int64)
-# Natürlicher Wertebereich jedes behaltenen Merkmals, damit jede Stufe Information
-# trägt (heading error ist [-1, 1]; speed und rays sind [0, 1]). Aligned mit FEATURE_IDX.
+
+# Wertebereiche der Features für Bins
 FEATURE_LOW  = np.array([-1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], dtype=np.float64)
 FEATURE_HIGH = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0], dtype=np.float64)
-N_BINS = 6          # Diskretisierungsstufen je Merkmal (Folie 43-47). Höher = feiner, aber langsamer
+N_BINS = 6
 
-# Lern-Hyperparameter
-ALPHA = 0.15        # Lernrate α des Temporal-Difference-Updates (Folie 38, 0 < α ≤ 1)
-# Hinweis: GAMMA = Discount-Faktor γ (Folie 22, 0 < γ < 1) kommt aus config.py.
+LEARNING_RATE = 0.15
 
-# Persistenz — getrennt von model.npy des DQN, damit sich beide nie überschreiben.
+# Speicherung
 QTABLE_PATH = os.path.join(MODEL_DIR, "qtable.npz")
 QSTATE_PATH = os.path.join(MODEL_DIR, "qtable_state.json")
 
-# Eine Q-Tabelle ist genau das: Zustands-Key (Tupel aus N Merkmals-Bins) -> Q-Wert-Vektor.
-QState = tuple                 # = ein Zustand s ∈ S (Folie 4), diskretisiert
-QTable = dict                  # = die Q-Tabelle (Folie 25): dict[QState, np.ndarray]
+# Map von tuple und dict zu var für übersicht
+QState = tuple
+QTable = dict
 
 __all__ = [
     "bin_values_for_qtable", "init_q_table", "q_row", "greedy_action", "epsilon_greedy_policy", "temporal_difference_update",
     "save_q_table", "load_q_table", "policy_action", "inspect_trace", "q_learning_loop",
-    "crossover_tables", "mutate_table", "run_qtable_worker",
+    "crossover_tables_biased", "mutate_table", "run_qtable_worker",
+    "breed_table_packs",
 ]
 
-
-# ── Zustands-Diskretisierung (Folie 4 «Zustand s ∈ S» / Folie 43 «State Space») ─
-
-
-# Folie 4 «Zustand s ∈ S» / Folie 43 «State Space»  → rename: discretize_state(obs)
 def bin_values_for_qtable(obs: np.ndarray) -> tuple[int, ...]:
-    """Macht aus dem 14-Float-Beobachtungsvektor einen diskreten, hashbaren ZUSTAND s.
-
-    Jedes behaltene Merkmal wird über seinen natürlichen Bereich nach [0, 1] normiert
-    und in eine von N_BINS Stufen gelegt, sodass zwei physikalisch ähnliche Situationen
-    auf dieselbe Tabellen-Zeile (denselben Zustand) fallen.
-    """
     feats = np.asarray(obs, dtype=np.float64)[FEATURE_IDX]
     norm = (feats - FEATURE_LOW) / (FEATURE_HIGH - FEATURE_LOW)
     bins = np.clip((norm * N_BINS).astype(np.int64), 0, N_BINS - 1)
     return tuple(int(b) for b in bins)
 
-
-# ── Tabellen-Operationen (das dict IST die Q-Tabelle; diese Funktionen wirken darauf) ──
-
-# Folie 40 «Initialisiere Q-Tabelle»  → rename: init_q_table()
+# Basis qTable
 def init_q_table() -> QTable:
-    """Eine leere Q-Tabelle (Zustände werden beim ersten Zugriff lazy ergänzt).
-
-    Folie 40 initialisiert "zufallsbasiert"; hier mit Nullen (siehe q_values).
-    """
     return {}
 
 
-# Folie 25 «Q-Tabelle» / Folie 24 «Q-Funktion Q(s,·)»  → rename: q_row(table, state)
+# QTable Row generation und getter
 def q_row(table: QTable, state: tuple[int, ...]) -> np.ndarray:
-    # Q-Wert-Vektor Q(s,·) des Zustands; beim ersten Zugriff als Nullen angelegt
     row = table.get(state)
     if row is None:
         row = np.zeros(N_ACTIONS, dtype=np.float32)
@@ -148,54 +62,57 @@ def q_row(table: QTable, state: tuple[int, ...]) -> np.ndarray:
     return row
 
 
-# Folie 28 «Optimale Policy  π(s) = argmax_a Q(s,a)»  → rename: greedy_action(table, state)
+# Verwendung der Aktion die den maximalen QWert hat über den state der rauskam => greedy
 def greedy_action(table: QTable, state: tuple[int, ...]) -> int:
-    # Index der Aktion mit maximalem Q-Wert im Zustand s = die (gierige) Policy π(s)
     return int(np.argmax(q_row(table, state)))
 
 
-# Folie 41: Damit jeder Zustand besucht werden kann
+_ZERO_ROW = np.zeros(N_ACTIONS, dtype=np.float32)
+
+
+def q_row_readonly(table: QTable, state: tuple[int, ...]) -> np.ndarray:
+    row = table.get(state)
+    return _ZERO_ROW if row is None else row
+
+
+def greedy_action_readonly(table: QTable, state: tuple[int, ...]) -> int:
+    return int(np.argmax(q_row_readonly(table, state)))
+
+
+def policy_action_readonly(table: QTable, obs: np.ndarray) -> int:
+    """Policy-Aktion π(s) OHNE die Tabelle zu verändern (für Anzeige/Eval)."""
+    return greedy_action_readonly(table, bin_values_for_qtable(obs))
+
+
+# Damit jeder Zustand besucht werden kann
 def epsilon_greedy_policy(table: QTable, state: tuple[int, ...], epsilon: float,
                    rng: np.random.Generator) -> int:
-    """Mit Wahrscheinlichkeit 1-ε die Policy-Aktion (argmax, Folie 28), sonst zufällig.
-
-    Die Zufallswahl (Exploration) ist die praktische Ergänzung zu Folie 40 Schritt 1,
-    damit — wie auf Folie 41 gefordert — wirklich jeder Zustand besucht werden kann.
-    """
+    #Mit Wahrscheinlichkeit 1-ε die Policy-Aktion, sonst zufällig.
     if rng.random() < epsilon:
         return int(rng.integers(N_ACTIONS))
     return greedy_action(table, state)
 
 
-# Folie 38 «Temporal Difference Model» / Folie 40 Schritt 5 «Update von Q(s,a)»
-#   → rename: temporal_difference_update(table, s, a, r, s_next, done)
-def temporal_difference_update(table: QTable, s: tuple[int, ...], a: int, r: float,
-           s_next: tuple[int, ...], done: bool) -> None:
-    """Der klassische tabellarische Q-Learning-Schritt (Folie 38, ändert ``table`` in place):
+# Q Learning Schritt
+def temporal_difference_update(table: QTable, state: tuple[int, ...], action: int,
+                               reward: float, next_state: tuple[int, ...],
+                               done: bool) -> None:
+    # Der klassische tabellarische Q-Learning-Schritt: Q(s,a) = Q(s,a) + α · [ r + γ · maxₐ′ Q(s′,a′) − Q(s,a) ]
 
-        Q(s,a) ← Q(s,a) + α · [ r + γ · maxₐ′ Q(s′,a′) − Q(s,a) ]
-
-    Zuordnung zur Folie 38:
-        ALPHA                         = Lernrate α
-        GAMMA                         = Discount-Faktor γ
-        np.max(q_values(.., s_next))  = maxₐ′ Q(s′,a′)   (bester Folgewert)
-        row[a]                        = Q(s,a)           (aktuelle Zelle)
-        target                        = r + γ · maxₐ′ Q(s′,a′)   (Bellman-Ziel, Folie 32)
-        (target - row[a])             = Δ, der TD-Fehler (Folie 37)
-
-    Im Zielzustand (done, s = s_goal, Folie 44) gibt es keine Zukunft: kein Bootstrap-
-    Term γ·maxₐ′Q(s′,a′), das Ziel ist dann nur ``r`` (entspricht Q(s_goal,·) = 0).
-    """
-    target = r if done else r + GAMMA * float(np.max(q_row(table, s_next)))
-    row = q_row(table, s)
-    row[a] += ALPHA * (target - row[a])
+    if done:
+        target = reward  # Episode vorbei → kein zukünftiger Wert mehr
+    else:
+        best_next_value = float(np.max(q_row(table, next_state)))
+        target = reward + GAMMA * best_next_value
+    row = q_row(table, state)
+    row[action] += LEARNING_RATE * (target - row[action])
 
 
 # ── Persistenz ──────────────────────────────────────────────────────────────────
 
-# (keine Folie — reine Speicherung)  → rename: save_q_table(...)
+# Speicherung
 def save_q_table(table: QTable, path: str = QTABLE_PATH) -> None:
-    """Schreibt die Q-Tabelle als komprimiertes .npz nach ``path`` (Zustände + Werte)."""
+    #Schreibt die Q-Tabelle als komprimiertes .npz nach path (Zustände + Werte)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if table:
         states = np.array(list(table.keys()), dtype=np.int16)
@@ -206,7 +123,7 @@ def save_q_table(table: QTable, path: str = QTABLE_PATH) -> None:
     np.savez_compressed(path, states=states, values=values)
 
 
-# (keine Folie — reine Speicherung)  → rename: load_q_table(...)
+# Speicherung
 def load_q_table(path: str = QTABLE_PATH) -> QTable:
     """Lädt eine zuvor mit :func:`save_table` geschriebene Q-Tabelle."""
     table = init_q_table()
@@ -234,7 +151,7 @@ def inspect_trace(table: QTable, obs: np.ndarray) -> tuple[np.ndarray, list[np.n
     Index jedes behaltenen Merkmals — so sieht man, in welchen Topf die Situation fällt.
     """
     state = bin_values_for_qtable(obs)
-    q = q_row(table, state).copy()
+    q = q_row_readonly(table, state).copy()   # nur lesen — Inspect darf nicht „lernen"
     hidden = [np.asarray(state, dtype=np.float32)]
     return q, hidden
 
@@ -244,38 +161,64 @@ def inspect_trace(table: QTable, obs: np.ndarray) -> tuple[np.ndarray, list[np.n
 # ein sparse dict[Zustand -> Q-Zeile], daher diese Tabellen-Varianten. rank_select
 # aus genetics.py ist generisch über Listen und wird direkt wiederverwendet.
 
-def _copy_table(t: QTable) -> QTable:
+def _copy_table(table: QTable) -> QTable:
     """Tiefe Kopie einer Q-Tabelle (Zeilen werden kopiert, nicht geteilt)."""
-    return {k: v.copy() for k, v in t.items()}
+    return {state: row.copy() for state, row in table.items()}
 
 
-def crossover_tables(ta: QTable, tb: QTable) -> QTable:
-    """Uniformes Crossover je Zustand: jede Q-Zeile stammt von einem zufälligen Elternteil.
+# Wichtige Invariante (Performance, vermeidet Lag am Generationsübergang):
+# Eine fertige Tabelle wird NIE mehr in place verändert — nur Worker mutieren Q-Zeilen,
+# und die kopieren ihre Eingabe vorab per _copy_table. Anzeige/Inspect/Eval/Speichern
+# lesen nur (read-only Helfer). Deshalb dürfen Crossover/Mutation unveränderte Q-Zeilen
+# einfach *referenzieren* statt zu kopieren (copy-on-write). Das spart pro Generation
+# tausende winzige NumPy-Allokationen — genau die Pure-Python-Arbeit, die sonst kurz das
+# GIL hält und die Frame-Broadcasts blockiert.
 
-    Spiegelt genetics.crossover (gen-weise Wahl) auf Zeilen-Ebene. Zustände, die nur ein
-    Elternteil kennt, werden unverändert übernommen — so geht gelerntes Wissen nicht verloren.
-    """
+def crossover_tables_biased(table_a: QTable, table_b: QTable,
+                            score_a: float, score_b: float) -> QTable:
+    """Uniformes gewichtetes Crossover: Bessere Eltern vererben mehr Zeilen."""
+
+    # 1. Softmax-Berechnung für das Gewicht von A
+    # (Der Abzug von max_score verhindert numerische Overflows bei sehr großen Scores)
+    max_score = max(score_a, score_b)
+    exp_a = np.exp(score_a - max_score)
+    exp_b = np.exp(score_b - max_score)
+    weight_a = exp_a / (exp_a + exp_b)
+
     child: QTable = {}
-    for k in set(ta) | set(tb):
-        ra, rb = ta.get(k), tb.get(k)
-        if ra is None:
-            child[k] = rb.copy()
-        elif rb is None:
-            child[k] = ra.copy()
+
+    # 2. Crossover-Logik: pro Zustand entscheidet der Zufall, von welchem
+    #    Elternteil die Q-Zeile kommt — der bessere gewinnt öfter.
+    for state in set(table_a) | set(table_b):
+        row_a, row_b = table_a.get(state), table_b.get(state)
+        if row_a is None:
+            child[state] = row_b      # nur B kennt diesen Zustand
+        elif row_b is None:
+            child[state] = row_a      # nur A kennt diesen Zustand
         else:
-            child[k] = (ra if np.random.random() < 0.5 else rb).copy()
+            # Der Zufallswert wird gegen weight_a geprüft statt gegen 0.5
+            child[state] = row_a if np.random.random() < weight_a else row_b
+
     return child
 
 
-def mutate_table(t: QTable, rate: float, noise: float) -> QTable:
-    """Addiert Gauß-Rauschen auf einen Bruchteil (`rate`) aller Q-Werte (Pendant zu genetics.mutate)."""
+def mutate_table(table: QTable, rate: float, noise: float) -> QTable:
+    """Addiert Gauß-Rauschen auf einen Bruchteil (`rate`) der Q-Werte (Pendant zu genetics.mutate).
+
+    Copy-on-write: nur Zeilen, die wirklich Rauschen abbekommen, werden kopiert; alle
+    anderen werden mit dem Elternteil geteilt (siehe Invariante oben). Bei kleinem `rate`
+    bleibt so die große Mehrheit der Zeilen unkopiert.
+    """
     child: QTable = {}
-    for k, row in t.items():
-        r = row.copy()
-        mask = np.random.rand(len(r)) < rate
-        if mask.any():
-            r[mask] += np.random.normal(0, noise, int(mask.sum())).astype(np.float32)
-        child[k] = r
+    for state, row in table.items():
+        mutation_mask = np.random.rand(len(row)) < rate   # welche Q-Werte bekommen Rauschen?
+        if mutation_mask.any():
+            mutated_row = row.copy()
+            mutated_row[mutation_mask] += np.random.normal(
+                0, noise, int(mutation_mask.sum())).astype(np.float32)
+            child[state] = mutated_row
+        else:
+            child[state] = row    # unverändert → Zeile mit dem Elternteil teilen
     return child
 
 
@@ -291,184 +234,73 @@ def run_qtable_worker(args: tuple) -> tuple[float, QTable, float, float]:
     inherited_table, track, n_steps, epsilon, eval_steps, use_rays = args
 
     # Deferred import (spawn-sicher auf Windows, wie worker.py).
-    from f1_rl.simulation.environment import F1Env
+    from f1_rl.simulation.environment import create_car_env, reset_env, step_env
 
     rng = np.random.default_rng()
     table = _copy_table(inherited_table)        # die geerbte Tabelle nicht in place verändern
 
-    env = F1Env(track=track, render_mode=None, use_rays=use_rays)
-    obs, _ = env.reset()
+    env = create_car_env(track, use_rays=use_rays)
+    obs = reset_env(env)
     state = bin_values_for_qtable(obs)
 
     # ── Lernphase (Folie 40 «FOR EACH Episode …») ────────────────────────────
     for _ in range(n_steps):
         action = epsilon_greedy_policy(table, state, epsilon, rng)
-        obs, reward, terminated, truncated, _ = env.step(action)
+        obs, reward, terminated, truncated, _ = step_env(env, action)
         next_state = bin_values_for_qtable(obs)
         done = terminated or truncated
         temporal_difference_update(table, state, action, reward, next_state, done)
         state = next_state
         if done:
-            obs, _ = env.reset()
+            obs = reset_env(env)
             state = bin_values_for_qtable(obs)
 
     # ── Greedy-Eval (eine Episode, Fitness = aufsummierter Reward) ───────────
     eval_reward = 0.0
-    obs, _ = env.reset()
+    obs = reset_env(env)
     for _ in range(eval_steps):
-        a = policy_action(table, obs)
-        obs, r, term, trunc, _ = env.step(a)
-        eval_reward += r
-        if term or trunc:
+        action = policy_action_readonly(table, obs)   # Eval lernt nicht → keine Phantom-Zustände
+        obs, reward, terminated, truncated, _ = step_env(env, action)
+        eval_reward += reward
+        if terminated or truncated:
             break
-    end_x, end_y = env.x_m, env.y_m
-    env.close()
+    end_x, end_y = env["x_m"], env["y_m"]
     return eval_reward, table, end_x, end_y
 
 
-# ── Greedy-Replay einer Tabelle (für die Racing-Line; Pendant zu trainer._record_replay) ──
+# ── Anzeige-Helfer (die eigentliche Anzeige-Schleife lebt in display.py) ──────
 
-def _record_table_replay(table: QTable, track, max_steps: int, use_rays: bool) -> np.ndarray:
-    from f1_rl.simulation.environment import F1Env
-    env = F1Env(track=track, render_mode=None, use_rays=use_rays)
-    obs, _ = env.reset()
-    frames: list[tuple] = []
-    for _ in range(max_steps):
-        a = policy_action(table, obs)
-        obs, _, terminated, _, _ = env.step(a)
-        frames.append((env.x_m, env.y_m, env.heading, env.speed_ms,
-                       env._last_throttle, env.progress))
-        if terminated:
-            break
-    env.close()
-    return np.array(frames, dtype=np.float32)
+def _table_as_policy(table: QTable) -> QTable:
+    """build_policy-Callback fürs gemeinsame Display: eine Q-Tabelle IST schon
+    die Policy (beim DQN wird hier stattdessen ein Netz aus Gewichten gebaut)."""
+    return table
 
 
-# ── Live-Anzeige der ganzen Population (Pendant zu trainer._display_thread) ──
+def _keep_table_reference(table: QTable) -> QTable:
+    """copy_individual-Callback für die Hall of Fame: Tabellen werden per
+    REFERENZ aufbewahrt statt kopiert — fertige Tabellen werden nie mehr
+    verändert (Invariante oben), Kopieren wäre nur unnötige Arbeit."""
+    return table
 
-def _qtable_display_thread(pop_holder: list, stop_event: threading.Event, track,
-                           render_queue: Queue, use_rays: bool = True,
-                           speed_holder: list | None = None, gen_holder: list | None = None,
-                           inspect_holder: list | None = None,
-                           inspect_queue: Queue | None = None,
-                           table_queue: Queue | None = None) -> None:
-    """Animiert alle Population-Tabellen ~60 fps (Policy = argmax) und streamt Frames.
 
-    Soft-Swap wie beim DQN-Display: bei neuer Generation fährt jedes Auto mit seiner
-    aktuellen Tabelle weiter bis zum nächsten Crash und übernimmt dann die neue Tabelle
-    (kein Massen-Teleport). MAX_DISPLAY_LAG verhindert zu großes Nachhinken.
+TABLE_MAX_ROWS = 400   # mehr Zeilen als Canvas-Pixel bringen visuell nichts → downsamplen
 
-    Für das inspizierte Auto werden zwei Dinge gestreamt: die Q-Zeile des aktuellen
-    Zustands (inspect_queue, ~10×/s) und die VOLLE Tabelle als Heatmap (table_queue, ~1×/s).
+
+def _table_heatmap_payload(table: QTable, selected_car: int) -> dict:
+    """Bereitet die volle Q-Tabelle des inspizierten Autos für die UI-Heatmap auf.
+
+    Die Zeilen werden stabil sortiert und bei sehr vielen Zuständen gleichmäßig
+    auf TABLE_MAX_ROWS heruntergerechnet — die Canvas zeigt ohnehin nur ~320
+    Pixelzeilen, und eine zu große Nutzlast würde die Server-Event-Loop blockieren.
     """
-    from f1_rl.server.protocol import inspect_to_dict, qtable_to_dict
-    from f1_rl.simulation.environment import CarFrame, F1Env, REWARD_PARTS
+    from f1_rl.server.protocol import qtable_to_dict
 
-    current_pop = pop_holder[0]
-    n_cars = len(current_pop)
-    envs = [F1Env(track=track, render_mode=None, use_rays=use_rays) for _ in range(n_cars)]
-    tables: list[QTable] = list(current_pop)
-    obses = [env.reset()[0] for env in envs]
-    next_tables: list = [None] * n_cars
-
-    if speed_holder is None:
-        speed_holder = [1]
-    if gen_holder is None:
-        gen_holder = [0]
-    car_gens = [int(gen_holder[0])] * n_cars
-    next_gen = [int(gen_holder[0])] * n_cars
-    dt = 1.0 / 60.0
-    frame_no = 0
-    INSPECT_EVERY = 6      # Q-Zeile ~10×/s
-    TABLE_EVERY = 60       # volle Tabelle ~1×/s (große Nutzlast)
-    MAX_DISPLAY_LAG = 2
-
-    while not stop_event.is_set():
-        t0 = time.perf_counter()
-        frame_no += 1
-        n_sub = max(1, int(speed_holder[0]))
-
-        new_pop = pop_holder[0]
-        if new_pop is not current_pop:
-            current_pop = new_pop
-            arriving_gen = int(gen_holder[0])
-            for i in range(n_cars):
-                next_tables[i] = current_pop[i]
-                next_gen[i] = arriving_gen
-
-        arriving = int(gen_holder[0])
-        frames: list = []
-        for i in range(n_cars):
-            if next_tables[i] is not None and arriving - car_gens[i] > MAX_DISPLAY_LAG:
-                tables[i] = next_tables[i]
-                next_tables[i] = None
-                car_gens[i] = next_gen[i]
-                obses[i] = envs[i].reset()[0]
-            term = False
-            for _ in range(n_sub):
-                a = policy_action(tables[i], obses[i])
-                obses[i], _, term, _, _ = envs[i].step(a)
-                if term:
-                    break
-            env = envs[i]
-            frames.append(CarFrame(
-                x=env.x_m, y=env.y_m, heading=env.heading,
-                speed=env.speed_ms, throttle=env._last_throttle,
-                checkpoint=env._checkpoint_idx, progress=env.progress,
-                lap=env.lap_count, rays=tuple(env._cast_rays()),
-                pack=0, score=env.episode_reward,
-                reward_parts=tuple(env.reward_parts[k] for k in REWARD_PARTS),
-                generation=car_gens[i], a_long=env._a_long, a_lat=env._a_lat,
-            ))
-            if term:
-                obses[i] = envs[i].reset()[0]
-                if next_tables[i] is not None:
-                    tables[i] = next_tables[i]
-                    next_tables[i] = None
-                    car_gens[i] = next_gen[i]
-
-        while not render_queue.empty():
-            try:
-                render_queue.get_nowait()
-            except Exception:            # noqa: BLE001
-                break
-        try:
-            render_queue.put_nowait(frames)
-        except Full:
-            pass
-
-        sel = inspect_holder[0] if inspect_holder is not None else None
-        valid_sel = isinstance(sel, int) and 0 <= sel < n_cars
-
-        # Q-Zeile + diskretisierter Zustand des inspizierten Autos (~10×/s).
-        if inspect_queue is not None and valid_sel and frame_no % INSPECT_EVERY == 0:
-            q, hidden = inspect_trace(tables[sel], obses[sel])
-            try:
-                while not inspect_queue.empty():
-                    inspect_queue.get_nowait()
-                inspect_queue.put_nowait(
-                    inspect_to_dict(sel, obses[sel], q, hidden, int(q.argmax())))
-            except Exception:            # noqa: BLE001
-                pass
-
-        # Volle Tabelle des inspizierten Autos als Heatmap (~1×/s, viele Zustände).
-        if table_queue is not None and valid_sel and frame_no % TABLE_EVERY == 0:
-            tbl = tables[sel]
-            keys = sorted(tbl.keys())            # stabile Zeilen-Reihenfolge über Updates
-            payload = qtable_to_dict(sel, keys, [tbl[k] for k in keys], FEATURE_IDX, N_BINS)
-            try:
-                while not table_queue.empty():
-                    table_queue.get_nowait()
-                table_queue.put_nowait(payload)
-            except Exception:            # noqa: BLE001
-                pass
-
-        remaining = dt - (time.perf_counter() - t0)
-        if remaining > 0:
-            time.sleep(remaining)
-
-    for env in envs:
-        env.close()
+    n_states = len(table)
+    keys = sorted(table.keys())          # stabile Zeilen-Reihenfolge über Updates
+    if n_states > TABLE_MAX_ROWS:
+        step_size = n_states / TABLE_MAX_ROWS
+        keys = [keys[int(i * step_size)] for i in range(TABLE_MAX_ROWS)]
+    return qtable_to_dict(selected_car, [table[k] for k in keys], n_states)
 
 
 # ── Generations-Bausteine (Pendant zu trainer._init_population/_update_hall_of_fame/_breed) ──
@@ -493,40 +325,39 @@ def _init_table_population(resume: bool, save_path: str, n_pop: int) -> tuple[li
     return [init_q_table() for _ in range(n_pop)], 0, -1e9
 
 
-def _update_table_hof(hall_of_fame: list, fitnesses: list, tables_out: list) -> None:
-    """Hält die besten HALL_OF_FAME_K Tabellen aller Zeiten (best first); Eingabe best-first."""
-    for fit, t in zip(fitnesses, tables_out):
-        if len(hall_of_fame) < HALL_OF_FAME_K:
-            hall_of_fame.append((fit, _copy_table(t)))
-            hall_of_fame.sort(key=lambda x: x[0], reverse=True)
-        elif fit > hall_of_fame[-1][0]:
-            hall_of_fame[-1] = (fit, _copy_table(t))
-            hall_of_fame.sort(key=lambda x: x[0], reverse=True)
-        else:
-            break
-
-
 def _breed_table_generation(tables_out: list, fitnesses: list, hall_of_fame: list,
                             best_ever_table: QTable, stagnation_count: int,
                             stagnation_boost: float, n_pop: int) -> list:
-    """Nächste Generation (Tier-Ansatz wie trainer._breed_next_generation, „classic"):
-    HOF-Eliten überleben unverändert, leicht mutierte Klone des Allzeit-Besten, der Rest
-    sind Crossover-Kinder mit rang-gestufter Mutation. Bei Stagnation eine frische (leere)
-    Tabelle injizieren (lernt sich in den Workern neu auf)."""
-    hof_tables = [t for _, t in hall_of_fame]
+    """Nächste Generation mit BIASED Crossover:
+    HOF-Eliten, mutierte Best-Klone und gewichtete Crossover-Kinder.
+    """
+    # hall_of_fame hat das Format [(score, table), (score, table), ...]
+    new_pop = [table for _, table in hall_of_fame]  # Tier 1: Eliten
 
-    new_pop = [_copy_table(t) for _, t in hall_of_fame]          # Tier 1: Eliten
-    for _ in range(N_BEST_CLONES):                               # Tier 2: Best-Klone
+    for _ in range(N_BEST_CLONES):  # Tier 2: Best-Klone
         if len(new_pop) < n_pop:
             new_pop.append(mutate_table(best_ever_table, MUTATION_RATE * 0.3, MUTATION_NOISE * 0.3))
 
-    n_protected = len(new_pop)                                   # Tier 3: Crossover-Kinder
+    n_protected = len(new_pop)  # Tier 3: Crossover-Kinder
+
+    # Wir kombinieren Tabellen und Scores, damit rank_select beides zurückgeben kann
+    # Format: [(score_1, table_1), (score_2, table_2), ...]
+    current_pop_scored = list(zip(fitnesses, tables_out))
+
     while len(new_pop) < n_pop:
-        pa = (rank_select(hof_tables)
-              if (hof_tables and np.random.random() < 0.5)
-              else rank_select(tables_out))
-        pb = rank_select(tables_out)
-        child = crossover_tables(pa, pb)
+        # Elternteil A auswählen (Score und Tabelle holen)
+        if hall_of_fame and np.random.random() < 0.5:
+            score_a, parent_a = rank_select(hall_of_fame)
+        else:
+            score_a, parent_a = rank_select(current_pop_scored)
+
+        # Elternteil B auswählen (Score und Tabelle holen)
+        score_b, parent_b = rank_select(current_pop_scored)
+
+        # Biased Crossover anwenden (besseres Elternteil vererbt mehr)
+        child = crossover_tables_biased(parent_a, parent_b, score_a, score_b)
+
+        # Mutieren des Kindes (mit Rang-Faktor wie bisher)
         rank_factor = (len(new_pop) - n_protected) / max(n_pop - n_protected, 1)
         child = mutate_table(
             child,
@@ -535,8 +366,74 @@ def _breed_table_generation(tables_out: list, fitnesses: list, hall_of_fame: lis
         )
         new_pop.append(child)
 
+    # Stagnations-Behandlung: Frische Tabelle injizieren
     if stagnation_count > 0 and stagnation_count % STAGNATION_GENS == 0:
         new_pop[-1] = init_q_table()
+
+    return new_pop[:n_pop]
+
+
+# ── Rudel-/Pack-Zucht auf Tabellen (Pendant zu genetics.breed_packs) ──────────
+# Gruppen-Selektion: schwache Tabellen überleben über ihr Pack. Gleiche Mechanik
+# wie der Vektor-Trainer, nur mit den Tabellen-Operatoren (biased Crossover/Mutation).
+
+def breed_table_packs(tables_out: list, fitnesses: list, pack_ids,
+                      hall_of_fame: list, best_ever_table: QTable, n_pop: int,
+                      *, pack_support: float, migration_rate: float,
+                      min_survivors: int, mutation_rate: float,
+                      mutation_noise: float) -> list:
+    """Speziierte (Pack-)Zucht von Q-Tabellen — schwache DNA überlebt über ihr Pack.
+
+    tables_out/fitnesses sind global best-first sortiert; pack_ids ist gleich
+    ausgerichtet. Schritte wie genetics.breed_packs: effektive Fitness zieht
+    schwache Mitglieder zum Pack-Besten hoch, jedes Pack behält min_survivors,
+    Restplätze ∝ fitness-geteilter Pack-Stärke, Zucht innerhalb des Packs mit
+    migration_rate Genfluss zwischen Packs, Allzeit-Beste/HOF immer übernommen.
+    """
+    fitness_arr = np.asarray(fitnesses, dtype=np.float64)
+    pack_ids = np.asarray(pack_ids)
+    unique_packs = np.unique(pack_ids)
+
+    pack_best = {int(p): fitness_arr[pack_ids == p].max() for p in unique_packs}
+    effective = np.array(
+        [own + pack_support * max(0.0, pack_best[int(p)] - own)
+         for own, p in zip(fitness_arr, pack_ids)])
+
+    new_pop: list = [best_ever_table]                     # Allzeit-Beste (Referenz, read-only)
+    for _, elite in hall_of_fame[:2]:                     # Top-HOF-Eliten
+        if len(new_pop) < n_pop:
+            new_pop.append(elite)
+
+    # Pro-Pack-Überlebende (Mitglieder behalten globale fitness-desc Reihenfolge).
+    pack_members = {int(p): np.where(pack_ids == p)[0] for p in unique_packs}
+    for members in pack_members.values():
+        for idx in members[:min_survivors]:
+            if len(new_pop) < n_pop:
+                new_pop.append(tables_out[idx])
+
+    # Restplätze den Packs ∝ fitness-geteilter Stärke zuteilen.
+    strengths = np.array([effective[m].sum() / len(m) for m in pack_members.values()])
+    strengths = strengths - strengths.min() + 1e-6
+    pack_probs = strengths / strengths.sum()
+    pack_keys = list(pack_members.keys())
+
+    def select_in_pack(members):
+        """Rang-Selektion innerhalb eines Packs → (score, table)."""
+        return rank_select([(fitnesses[i], tables_out[i]) for i in members])
+
+    while len(new_pop) < n_pop:
+        if np.random.random() < migration_rate and len(pack_keys) > 1:
+            ia, ib = np.random.choice(len(pack_keys), 2, replace=False)
+            score_a, parent_a = select_in_pack(pack_members[pack_keys[ia]])
+            score_b, parent_b = select_in_pack(pack_members[pack_keys[ib]])
+        else:
+            chosen = pack_keys[np.random.choice(len(pack_keys), p=pack_probs)]
+            score_a, parent_a = select_in_pack(pack_members[chosen])
+            score_b, parent_b = select_in_pack(pack_members[chosen])
+        child = crossover_tables_biased(parent_a, parent_b, score_a, score_b)
+        child = mutate_table(child, mutation_rate, mutation_noise)
+        new_pop.append(child)
+
     return new_pop[:n_pop]
 
 
@@ -576,22 +473,28 @@ def q_learning_loop(
     resume: bool = False,
     steps_per_gen: int = STEPS_PER_GEN,
     total_gens: int | None = None,
-    evolution_mode: str = "qtable",   # angenommen & ignoriert (Pack-Modus gibt es hier nicht)
+    evolution_mode: str = "qtable",   # "qtable" = klassisch, "qtable_pack" = Rudel-Selektion
     use_rays: bool = True,
     cancel_event=None,
     table_queue: Queue | None = None,  # Live-Stream der vollen Tabelle (nur Q-Table-Modus)
 ) -> tuple[QTable, object]:
-    """Genetische, parallele Q-Tabellen-Evolution (Pendant zu trainer.train).
+    """Genetische, parallele Q-Tabellen-Evolution.
 
     QTABLE_N_POP Agenten, je in einem eigenen Prozess: jeder lernt seine Tabelle online
-    (Q-Learning, Folie 40/38) und wird greedy bewertet. Danach selektiert/kreuzt/mutiert
+    (Q-Learning) und wird greedy bewertet. Danach selektiert/kreuzt/mutiert
     der GA die Tabellen pro Generation. Gleiche Umgebung, gleiches WebSocket-Protokoll und
     dieselbe Live-Population-Ansicht wie der DQN-Trainer — nur die Policy ist eine Q-Tabelle.
 
-    Nicht genutzte, aber akzeptierte kwargs (evolution_mode, …) halten die Signatur
-    austauschbar mit trainer.train, damit session.py beide aufrufen kann.
+    evolution_mode "qtable_pack" aktiviert die Rudel-/Gruppen-Selektion (wie beim DQN):
+    Tabellen werden nach Endposition + Score in Packs geclustert und pro Pack gezüchtet,
+    sodass schwache Tabellen über ihr Pack überleben.
     """
-    from f1_rl.learning.trainer import _emit_racing_line, _eval_step_budget
+    from f1_rl.learning.display import run_population_display
+    from f1_rl.learning.evolution import (
+        epsilon_for_generation, eval_step_budget, update_auto_speed,
+        update_hall_of_fame, update_stagnation,
+    )
+    from f1_rl.learning.replay import emit_racing_line, record_greedy_replay
     from f1_rl.simulation.track_loader import load_track
 
     os.makedirs(MODEL_DIR, exist_ok=True)
@@ -599,41 +502,56 @@ def q_learning_loop(
         save_path = QTABLE_PATH
     if track is None:
         track = load_track(track_query, geojson_fallback_path=geojson_fallback)
-    print(f"[qtable] Track: {track.name}  {track.total_length_m:.0f} m")
+    print(f"[qtable] Track: {track['name']}  {track['total_length_m']:.0f} m")
 
     if total_gens is None:
         total_gens = 200
     n_pop = QTABLE_N_POP
+    use_packs = evolution_mode == "qtable_pack"   # Rudel-/Gruppen-Selektion an?
 
     # ── Population initialisieren / Resume ───────────────────────────────────
     population, start_gen, best_ever_fitness = _init_table_population(resume, save_path, n_pop)
-    best_ever_table = _copy_table(population[0])
+    best_ever_table = population[0]
     hall_of_fame: list[tuple[float, QTable]] = []
-    top_10: list[tuple[float, int]] = []
     stagnation_count = 0
     prev_best_eval = -1e9
     steps_so_far = 0
+    last_line_t = 0.0   # drosselt das Racing-Line-Replay (pure-Python, ~Tausende Steps)
 
     pop_holder = [list(population)]    # Display-Thread liest pop_holder[0]
+    pack_holder = [[0] * n_pop]        # parallele Pack-IDs für die Schwarm-Färbung
     gen_holder = [start_gen]
     stop_event = threading.Event()
+    print(f"[qtable] Evolution mode: {evolution_mode}")
 
     print(f"[qtable] Genetic tabular Q-learning  {n_pop} agents x {steps_per_gen} steps/gen "
-          f"x {total_gens} gens  features={len(FEATURE_IDX)} bins={N_BINS} alpha={ALPHA} gamma={GAMMA}")
+          f"x {total_gens} gens  features={len(FEATURE_IDX)} bins={N_BINS} alpha={LEARNING_RATE} gamma={GAMMA}")
 
     if render_queue is not None:
-        disp = threading.Thread(
-            target=_qtable_display_thread,
-            args=(pop_holder, stop_event, track, render_queue, use_rays, speed_holder,
-                  gen_holder, inspect_holder, inspect_queue, table_queue),
+        display_thread = threading.Thread(
+            target=run_population_display,
+            args=(pop_holder, stop_event, track, render_queue),
+            kwargs=dict(
+                build_policy=_table_as_policy,            # Tabelle ist schon die Policy
+                choose_action=policy_action_readonly,     # Anzeige verändert die Tabelle nicht
+                inspect_trace_fn=inspect_trace,
+                use_rays=use_rays,
+                speed_holder=speed_holder,
+                gen_holder=gen_holder,
+                inspect_holder=inspect_holder,
+                inspect_queue=inspect_queue,
+                table_queue=table_queue,
+                make_table_payload=_table_heatmap_payload,
+                pack_holder=pack_holder if use_packs else None,
+            ),
             daemon=True,
         )
-        disp.start()
+        display_thread.start()
     else:
-        disp = None
+        display_thread = None
 
     n_workers = min(n_pop, os.cpu_count() or 4)
-    eval_steps = _eval_step_budget(track)
+    eval_steps = eval_step_budget(track)
     print(f"[qtable] Spawning {n_workers} worker processes  eval={eval_steps} steps/episode")
 
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
@@ -642,54 +560,76 @@ def q_learning_loop(
                 print(f"[qtable] Stop requested — ending at generation {gen}")
                 break
 
-            gen_t0 = time.perf_counter()
-            frac = (gen - start_gen) / total_gens
-            epsilon = (EPSILON_START - (EPSILON_START - EPSILON_MIN) * frac / EXPLORE_FRAC
-                       if frac < EXPLORE_FRAC else EPSILON_MIN)
+            gen_start_time = time.perf_counter()
+            # Stetiges Sinken des Epsilon-Wertes (erst viel erkunden, später greedy)
+            epsilon = epsilon_for_generation(gen, start_gen, total_gens)
 
             # 1. Population auswerten (ein Worker-Prozess je Tabelle), best first.
             results = list(executor.map(
                 run_qtable_worker,
-                [(t, track, steps_per_gen, epsilon, eval_steps, use_rays) for t in population],
+                [(table, track, steps_per_gen, epsilon, eval_steps, use_rays)
+                 for table in population],
                 chunksize=1,
             ))
-            fitnesses = [r[0] for r in results]
-            tables_out = [r[1] for r in results]
-            order = sorted(range(len(fitnesses)), key=lambda i: fitnesses[i], reverse=True)
-            fitnesses = [fitnesses[i] for i in order]
-            tables_out = [tables_out[i] for i in order]
+            fitnesses = [result[0] for result in results]
+            tables_out = [result[1] for result in results]
+            ghost_positions = [(result[2], result[3]) for result in results]   # Endpositionen
+            best_first = sorted(range(len(fitnesses)), key=lambda i: fitnesses[i], reverse=True)
+            fitnesses = [fitnesses[i] for i in best_first]
+            tables_out = [tables_out[i] for i in best_first]
+            ghost_positions = [ghost_positions[i] for i in best_first]
 
             # 2. Allzeit-Bestenliste (Hall of Fame) über Tabellen.
-            _update_table_hof(hall_of_fame, fitnesses, tables_out)
+            # copy_individual = Identität: fertige Tabellen werden nie mehr verändert
+            # (Invariante oben), Referenzen aufzubewahren ist also sicher und billig.
+            update_hall_of_fame(hall_of_fame, fitnesses, tables_out,
+                                copy_individual=_keep_table_reference)
             if hall_of_fame and hall_of_fame[0][0] > best_ever_fitness:
                 best_ever_fitness = hall_of_fame[0][0]
-                best_ever_table = _copy_table(hall_of_fame[0][1])
-                _emit_racing_line(line_queue, _record_table_replay(
-                    best_ever_table, track, eval_steps, use_rays))
+                best_ever_table = hall_of_fame[0][1]   # Referenz (wird nur read-only genutzt)
+                # Replay ist ein langer pure-Python-Lauf (hält das GIL). Bei den schnellen
+                # Tabellen-Generationen kommen neue Bestwerte im Sekundentakt → höchstens
+                # alle 2 s neu aufzeichnen, sonst hungert die Event-Loop (ruckelndes UI).
+                now = time.perf_counter()
+                if now - last_line_t > 2.0:
+                    last_line_t = now
+                    emit_racing_line(line_queue, record_greedy_replay(
+                        best_ever_table, policy_action_readonly, track,
+                        eval_steps, use_rays=use_rays))
 
-            # Sortierte Population + Generation an die Live-Anzeige übergeben.
+            # 3. Pack-Zuordnung (nur Rudel-Modus): Tabellen nach Endposition +
+            #    Score clustern, ähnlich fahrende Autos landen im selben Pack.
+            pack_ids = [0] * n_pop
+            if use_packs:
+                descriptors = np.array(
+                    [[gx, gy, fit] for (gx, gy), fit in zip(ghost_positions, fitnesses)],
+                    dtype=np.float64,
+                )
+                pack_ids = assign_packs(descriptors, N_PACKS).tolist()
+
+            # Sortierte Population + Pack-Farben + Generation an die Live-Anzeige übergeben.
             gen_holder[0] = gen
             pop_holder[0] = list(tables_out)
-
-            # 3. Leaderboard (Top-10).
-            if len(top_10) < 10 or fitnesses[0] > top_10[-1][0]:
-                top_10.append((fitnesses[0], gen))
-                top_10.sort(key=lambda x: x[0], reverse=True)
-                if len(top_10) > 10:
-                    top_10.pop()
+            pack_holder[0] = list(pack_ids)
 
             # 4. Stagnation → Mutation hochregeln.
-            if fitnesses[0] > prev_best_eval + 0.5:
-                prev_best_eval = fitnesses[0]
-                stagnation_count = 0
-            else:
-                stagnation_count += 1
-            stagnation_boost = 1.0 + min(2.0, stagnation_count / STAGNATION_GENS)
+            prev_best_eval, stagnation_count, stagnation_boost = update_stagnation(
+                prev_best_eval, stagnation_count, fitnesses[0])
 
-            # 5. Nächste Generation züchten.
-            population = _breed_table_generation(
-                tables_out, fitnesses, hall_of_fame, best_ever_table,
-                stagnation_count, stagnation_boost, n_pop)
+            # 5. Nächste Generation züchten (Pack-Selektion oder klassisch).
+            if use_packs:
+                population = breed_table_packs(
+                    tables_out, fitnesses, pack_ids, hall_of_fame, best_ever_table, n_pop,
+                    pack_support  = PACK_SUPPORT,
+                    migration_rate= MIGRATION_RATE,
+                    min_survivors = PACK_MIN_SURVIVORS,
+                    mutation_rate = MUTATION_RATE  * stagnation_boost,
+                    mutation_noise= MUTATION_NOISE * stagnation_boost,
+                )
+            else:
+                population = _breed_table_generation(
+                    tables_out, fitnesses, hall_of_fame, best_ever_table,
+                    stagnation_count, stagnation_boost, n_pop)
 
             # 6. Stats + Checkpoint.
             best_states = len(tables_out[0])
@@ -703,15 +643,15 @@ def q_learning_loop(
                         "generation":   gen,
                         "best_fitness": fitnesses[0],
                         "mean_fitness": float(np.mean(fitnesses)),
-                        "n_packs":      best_states,   # Slot zweckentfremdet: Zustände der besten Tabelle
-                        "top_scores":   list(top_10),
+                        # Im Pack-Modus die Pack-Anzahl, sonst Zustände der besten Tabelle.
+                        "n_packs":      len(set(pack_ids)) if use_packs else best_states,
                     })
                 except Full:
                     pass
 
             if (gen - start_gen + 1) % SAVE_EVERY == 0 or gen == start_gen + total_gens - 1:
                 save_q_table(best_ever_table, save_path)
-                _write_state(track.name, steps_so_far, total_timesteps or steps_so_far,
+                _write_state(track["name"], steps_so_far, total_timesteps or steps_so_far,
                              epsilon, gen, best_ever_fitness, len(best_ever_table))
                 stag_str = f"  stag={stagnation_count}×{stagnation_boost:.1f}" if stagnation_count > 0 else ""
                 print(f"[gen {gen:>4d}/{start_gen + total_gens - 1}]  ε={epsilon:.3f}"
@@ -720,17 +660,15 @@ def q_learning_loop(
 
             # 7. Auto-Speed: Animation an die Generations-Rechenzeit koppeln.
             if auto_speed and speed_holder is not None:
-                gen_seconds = time.perf_counter() - gen_t0
-                if gen_seconds > 0:
-                    target = math.ceil(eval_steps / (60.0 * gen_seconds))
-                    speed_holder[0] = max(1, min(SIM_SPEED_AUTO_CAP, target))
+                update_auto_speed(speed_holder, eval_steps,
+                                  time.perf_counter() - gen_start_time)
 
     stop_event.set()
-    if disp is not None:
-        disp.join(timeout=2.0)
+    if display_thread is not None:
+        display_thread.join(timeout=2.0)
 
     save_q_table(best_ever_table, save_path)
-    _write_state(track.name, steps_so_far, total_timesteps or steps_so_far,
+    _write_state(track["name"], steps_so_far, total_timesteps or steps_so_far,
                  EPSILON_MIN, start_gen + total_gens - 1, best_ever_fitness, len(best_ever_table))
     print(f"[qtable] Done. best={best_ever_fitness:+.1f}  {len(best_ever_table)} states -> {save_path}")
     return best_ever_table, track

@@ -1,18 +1,18 @@
-"""Serialization between the Python simulation objects and the JSON the browser
-front-end consumes over the WebSocket.
+"""Serialisierung zwischen den Python-Simulationsobjekten und dem JSON, das das
+Browser-Frontend über den WebSocket konsumiert.
 
-All coordinates are in **metres** (the simulation's native units); the front-end
-handles scaling/centering for display. Each car is a ``CarFrame`` (a NamedTuple
-defined in environment.py) — see its field list there.
+Alle Koordinaten sind in **Metern** (die nativen Einheiten der Simulation); das
+Frontend skaliert/zentriert für die Anzeige. Jedes Auto ist ein ``CarFrame``
+(ein reines Dict, Typ in environment.py beschrieben) — Schlüssel siehe dort.
 """
 from __future__ import annotations
 
 from f1_rl.simulation.environment import REWARD_PARTS, CarFrame
 
-# Track-edge bands measured OUTWARD from the racing surface edge, in metres.
-# Kept deliberately THIN: large run-off buffers (15 m) merge across straights and
-# fill the infield on compact circuits, which looks like blobs rather than a
-# track. A slim red kerb + a narrow asphalt verge reads as a clean racetrack edge.
+# Streckenrand-Bänder, von der Fahrbahnkante nach AUSSEN gemessen, in Metern.
+# Bewusst SCHMAL: große Auslauf-Puffer (15 m) verschmelzen über Geraden und füllen
+# auf kompakten Strecken das Infield — sieht nach Klecksen statt Strecke aus. Ein
+# schmaler roter Randstein + ein schmaler Asphaltstreifen liest sich als saubere Kante.
 _TRACK_ZONES = [
     ("runoff", 4.0),
 ]
@@ -30,26 +30,26 @@ def _geom_polys(geom) -> list:
 
 
 def track_to_dict(track) -> dict:
-    """Geometry the browser needs to draw the circuit once: the racing surface,
-    plus the official run-off zones (kerb / asphalt run-off / gravel / barrier)
-    as outward buffers, so the edge looks like the real FIA cross-section."""
-    corr = track.corridor
+    """Geometrie, die der Browser einmal zum Zeichnen der Strecke braucht: die
+    Fahrbahn plus die Auslaufzonen (Randstein / Asphalt-Auslauf / Kies / Bande)
+    als Außenpuffer, damit die Kante wie der echte FIA-Querschnitt aussieht."""
+    corr = track["corridor"]
     poly = max(corr.geoms, key=lambda g: g.area) if corr.geom_type == "MultiPolygon" else corr
     minx, miny, maxx, maxy = corr.bounds
 
-    # Concentric run-off bands, outermost first (the front-end stacks them so each
-    # inner band sits on top, revealing the one beneath as a ring).
+    # Konzentrische Auslauf-Bänder, äußerstes zuerst (das Frontend stapelt sie, jedes
+    # innere liegt oben und lässt das darunter als Ring durchscheinen).
     zones = []
     for name, dist in _TRACK_ZONES:
         band = corr.buffer(dist, join_style=1).simplify(0.5, preserve_topology=True)
         zones.append({"name": name, "polygons": [_poly_rings(p) for p in _geom_polys(band)]})
-    zones.reverse()  # send outermost (barrier) first
+    zones.reverse()  # äußerstes (Bande) zuerst senden
 
     return {
-        "name": track.name,
-        "total_length_m": float(track.total_length_m),
-        "half_width_m": float(track.half_width_m),
-        "centerline": [[float(x), float(y)] for x, y in track.centerline_m.coords],
+        "name": track["name"],
+        "total_length_m": float(track["total_length_m"]),
+        "half_width_m": float(track["half_width_m"]),
+        "centerline": [[float(x), float(y)] for x, y in track["centerline_m"].coords],
         "corridor_exterior": [[float(x), float(y)] for x, y in poly.exterior.coords],
         "corridor_interiors": [
             [[float(x), float(y)] for x, y in ring.coords] for ring in poly.interiors
@@ -60,29 +60,29 @@ def track_to_dict(track) -> dict:
     }
 
 
-def car_to_dict(c: CarFrame) -> dict:
-    """One car's per-frame state, as JSON-ready primitives."""
+def car_to_dict(car: CarFrame) -> dict:
+    """Der Zustand eines Autos pro Frame, als JSON-fertige Primitive."""
     return {
-        "x": float(c.x), "y": float(c.y), "heading": float(c.heading),
-        "speed": float(c.speed), "throttle": float(c.throttle),
-        "checkpoint": int(c.checkpoint), "progress": float(c.progress),
-        "lap": int(c.lap),
-        "rays": [float(r) for r in c.rays],
-        "pack": int(c.pack),
-        "score": float(c.score),
-        "reward_parts": {k: float(v) for k, v in zip(REWARD_PARTS, c.reward_parts)},
-        "generation": int(c.generation),
-        "a_long": float(c.a_long),
-        "a_lat": float(c.a_lat),
+        "x": float(car["x"]), "y": float(car["y"]), "heading": float(car["heading"]),
+        "speed": float(car["speed"]), "throttle": float(car["throttle"]),
+        "checkpoint": int(car["checkpoint"]), "progress": float(car["progress"]),
+        "lap": int(car["lap"]),
+        "rays": [float(r) for r in car["rays"]],
+        "pack": int(car["pack"]),
+        "score": float(car["score"]),
+        "reward_parts": {k: float(v) for k, v in zip(REWARD_PARTS, car["reward_parts"])},
+        "generation": int(car["generation"]),
+        "a_long": float(car["a_long"]),
+        "a_lat": float(car["a_lat"]),
     }
 
 
 def racing_line_to_dict(points) -> dict:
-    """The best lap's path for the browser to draw, coloured by speed.
+    """Die Bahn der besten Runde für den Browser, nach Tempo eingefärbt.
 
-    ``points`` is an iterable of (x, y, speed, throttle): metres / m·s⁻¹ / −1..1.
-    vmin/vmax (speed) are sent alongside so the front-end can map speed → colour
-    without a second pass; throttle drives the brake-vs-accel chart.
+    ``points`` ist iterierbar über (x, y, speed, throttle): Meter / m·s⁻¹ / −1..1.
+    vmin/vmax (Tempo) werden mitgesendet, damit das Frontend Tempo → Farbe ohne
+    zweiten Durchlauf abbildet; throttle treibt das Gas/Bremse-Chart.
     """
     pts = [[float(x), float(y), float(v), float(thr)] for x, y, v, thr in points]
     speeds = [p[2] for p in pts] or [0.0]
@@ -90,10 +90,10 @@ def racing_line_to_dict(points) -> dict:
 
 
 def inspect_to_dict(index: int, obs, q, hidden, action: int) -> dict:
-    """One car's network state for the live net/Q-value visualisation.
+    """Der Netz-Zustand eines Autos für die Live-Netz-/Q-Wert-Visualisierung.
 
-    obs = 14 inputs, q = 20 Q-values (the DQN "table" for this state), hidden =
-    per-layer post-ReLU activations, action = the greedy (chosen) action index.
+    obs = 14 Eingaben, q = 20 Q-Werte (die DQN-„Tabelle" dieses Zustands), hidden =
+    Post-ReLU-Aktivierungen je Schicht, action = Index der gewählten (greedy) Aktion.
     """
     return {
         "index": int(index),
@@ -104,26 +104,24 @@ def inspect_to_dict(index: int, obs, q, hidden, action: int) -> dict:
     }
 
 
-def qtable_to_dict(index: int, states, values, feature_idx, n_bins: int) -> dict:
-    """The full learned Q-table of the inspected car, for the heatmap view.
+def qtable_to_dict(index: int, values, n_states: int) -> dict:
+    """Die Q-Tabelle des inspizierten Autos für die Heatmap — bewusst schlank.
 
-    ``states`` is an iterable of discretised state keys (tuples of bin indices),
-    ``values`` the aligned Q-rows (one ``N_ACTIONS`` vector per state). ``feature_idx``
-    / ``n_bins`` describe the discretisation so the front-end can label the axes.
-    Pure (takes primitives only) — built by the q-table display thread, which holds
-    FEATURE_IDX / N_BINS — so there is no import cycle with learning.qtable.
+    Das Frontend färbt nur die Q-Zeilen, also senden wir nur ``values`` (eine
+    ``N_ACTIONS``-Zeile je Zustand, gerundet, vom Aufrufer schon gedeckelt/heruntergerechnet)
+    plus die echte Gesamtzahl ``n_states`` für die Beschriftung. Zustands-Schlüssel /
+    Diskretisierung bleiben absichtlich weg: nicht gerendert und würden die alle-2-s-
+    WebSocket-Nutzlast aufblähen, deren ``json.dumps`` auf der asyncio-Pumpe die Frames stört.
     """
     return {
         "index": int(index),
-        "states": [[int(b) for b in s] for s in states],
-        "values": [[float(v) for v in row] for row in values],
-        "feature_idx": [int(i) for i in feature_idx],
-        "n_bins": int(n_bins),
+        "n_states": int(n_states),
+        "values": [[round(float(v), 2) for v in row] for row in values],
     }
 
 
 def stats_to_dict(stats: dict) -> dict:
-    """Slim, JSON-safe copy of the training stats (drops the heavy ghost array)."""
+    """Schlanke, JSON-sichere Kopie der Trainings-Stats (ohne das schwere Ghost-Array)."""
     return {
         "timesteps": int(stats.get("timesteps", 0)),
         "generation": int(stats.get("generation", 0)),
@@ -131,5 +129,4 @@ def stats_to_dict(stats: dict) -> dict:
         "best_fitness": float(stats.get("best_fitness", 0.0)),
         "mean_fitness": float(stats.get("mean_fitness", 0.0)),
         "n_packs": int(stats.get("n_packs", 0)),
-        "top_scores": [[float(s), int(g)] for s, g in stats.get("top_scores", [])],
     }

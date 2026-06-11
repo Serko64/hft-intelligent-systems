@@ -1,9 +1,9 @@
-"""Genetic-algorithm operations on flat weight vectors.
+"""Genetische Operationen auf flachen Gewichtsvektoren.
 
-These functions are deliberately small and pure (numpy only): they take weight
-vectors / fitnesses in, and return new weight vectors out. The actual training
-of each individual happens in worker.py; the generation loop lives in
-trainer.py. Keeping the GA maths here makes each piece easy to read on its own.
+Bewusst klein und rein (nur numpy): rein gehen Gewichtsvektoren / Fitnesswerte,
+raus kommen neue Gewichtsvektoren. Das eigentliche Training jedes Individuums
+passiert in worker.py, die Generationsschleife in trainer.py. Die GA-Mathematik
+hier zu bündeln macht jedes Teil für sich gut lesbar.
 """
 from __future__ import annotations
 
@@ -12,24 +12,24 @@ import numpy as np
 
 # ── Basic operators ───────────────────────────────────────────────────────────
 
-def crossover(wa: np.ndarray, wb: np.ndarray) -> np.ndarray:
-    """Uniform crossover on flat weight vectors (each gene comes from a random parent)."""
-    mask = np.random.random(len(wa)) > 0.5
-    child = wb.copy()
-    child[mask] = wa[mask]
+def crossover(parent_a: np.ndarray, parent_b: np.ndarray) -> np.ndarray:
+    """Uniformes Crossover auf flachen Vektoren (jedes Gen von einem Zufallselternteil)."""
+    from_parent_a = np.random.random(len(parent_a)) > 0.5   # bool-Maske pro Gewicht
+    child = parent_b.copy()
+    child[from_parent_a] = parent_a[from_parent_a]
     return child
 
 
 def mutate(weights: np.ndarray, rate: float, noise: float) -> np.ndarray:
-    """Add Gaussian noise to a random fraction (`rate`) of the weights."""
+    """Addiert Gauß-Rauschen auf einen Zufallsanteil (`rate`) der Gewichte."""
     child = weights.copy()
-    mask  = np.random.rand(len(child)) < rate
-    child[mask] += np.random.normal(0, noise, mask.sum()).astype(np.float32)
+    mutation_mask = np.random.rand(len(child)) < rate   # welche Gewichte bekommen Rauschen?
+    child[mutation_mask] += np.random.normal(0, noise, mutation_mask.sum()).astype(np.float32)
     return child
 
 
 def rank_select(weights_list: list) -> np.ndarray:
-    """Rank-proportional selection; weights_list must be sorted descending."""
+    """Rang-proportionale Selektion; weights_list muss absteigend sortiert sein."""
     n = len(weights_list)
     probs = np.arange(n, 0, -1, dtype=np.float64)
     probs /= probs.sum()
@@ -39,13 +39,13 @@ def rank_select(weights_list: list) -> np.ndarray:
 # ── Pack / swarm evolution ──────────────────────────────────────────────────────
 
 def assign_packs(descriptors: np.ndarray, k: int, iters: int = 12) -> np.ndarray:
-    """Cluster individuals into *k* packs via a tiny numpy k-means.
+    """Clustert Individuen in *k* Packs per winzigem numpy-k-Means.
 
-    *descriptors* is (N, D) — a behavioural fingerprint per individual (e.g. where it
-    ended up + how well it scored). Columns are z-normalised first so position and
-    fitness contribute on comparable scales. Returns an (N,) array of pack ids in
-    [0, k).  Cars that drive similarly land in the same pack, so packs are visually
-    coherent groups in the live view.
+    *descriptors* ist (N, D) — ein Verhaltens-Fingerabdruck pro Individuum (z. B.
+    Endposition + Score). Spalten werden zuerst z-normiert, damit Position und
+    Fitness auf vergleichbaren Skalen beitragen. Gibt ein (N,)-Array mit Pack-IDs
+    in [0, k) zurück. Ähnlich fahrende Autos landen im selben Pack, sodass Packs
+    in der Live-Ansicht zusammenhängende Gruppen sind.
     """
     desc = np.asarray(descriptors, dtype=np.float64)
     n = len(desc)
@@ -60,21 +60,26 @@ def assign_packs(descriptors: np.ndarray, k: int, iters: int = 12) -> np.ndarray
     centers = norm[np.random.choice(n, k, replace=False)].copy()
     labels = np.zeros(n, dtype=np.int64)
     for _ in range(iters):
-        d = np.linalg.norm(norm[:, None, :] - centers[None, :, :], axis=2)  # (n, k)
-        new_labels = d.argmin(axis=1)
+        # Abstand jedes Individuums zu jedem Cluster-Zentrum, alle auf einmal:
+        # norm hat Shape (n, D), centers (k, D). Durch das Einfügen leerer Achsen
+        # ([:, None, :] bzw. [None, :, :]) rechnet numpy die Differenz für jede
+        # (Individuum, Zentrum)-Kombination → Ergebnis-Shape (n, k).
+        distances = np.linalg.norm(norm[:, None, :] - centers[None, :, :], axis=2)  # (n, k)
+        new_labels = distances.argmin(axis=1)   # jedem Individuum das nächste Zentrum
         if np.array_equal(new_labels, labels):
             labels = new_labels
             break
         labels = new_labels
-        for c in range(k):
-            mask = labels == c
-            if mask.any():
-                centers[c] = norm[mask].mean(axis=0)
+        # Jedes Zentrum auf den Mittelwert seiner Mitglieder verschieben.
+        for cluster in range(k):
+            members = labels == cluster
+            if members.any():
+                centers[cluster] = norm[members].mean(axis=0)
     return labels
 
 
 def _select_in_pack(weights_out: list, members: np.ndarray) -> np.ndarray:
-    """Rank-select within one pack. *members* are global indices in fitness-desc order."""
+    """Rang-Selektion innerhalb eines Packs. *members* = globale Indizes in Fitness-desc-Reihenfolge."""
     sub = [weights_out[i] for i in members]
     return rank_select(sub)
 
@@ -93,63 +98,67 @@ def breed_packs(
     mutation_rate: float,
     mutation_noise: float,
 ) -> list:
-    """Speciated (pack) breeding — group selection so weak DNA can survive via its pack.
+    """Speziierte (Pack-)Zucht — Gruppen-Selektion, sodass schwache DNA über ihr Pack überlebt.
 
-    *weights_out* / *fitnesses* are sorted globally descending; *pack_ids* is aligned.
+    *weights_out* / *fitnesses* sind global absteigend sortiert; *pack_ids* ist gleich ausgerichtet.
 
-    Mechanics:
-      1. Effective fitness lifts weak members toward their pack's best
-         (``eff = own + pack_support·max(0, pack_best − own)``) — the headline:
-         poor DNA in a strong pack survives.
-      2. Each pack keeps its top ``min_survivors`` unchanged → no pack goes extinct
-         abruptly, preserving diversity.
-      3. Remaining slots go to packs ∝ fitness-shared pack strength (sum(eff)/size),
-         so large packs don't dominate.
-      4. Breeding is within-pack crossover, with ``migration_rate`` cross-pack gene flow.
-      5. The all-time best + top hall-of-fame elites are always carried over.
+    Mechanik:
+      1. Effektive Fitness hebt schwache Mitglieder zum Pack-Besten
+         (``eff = own + pack_support·max(0, pack_best − own)``) — Kernidee:
+         schwache DNA in einem starken Pack überlebt.
+      2. Jedes Pack behält seine Top-``min_survivors`` unverändert → kein Pack
+         stirbt abrupt aus, Vielfalt bleibt erhalten.
+      3. Restplätze gehen an Packs ∝ fitness-geteilter Pack-Stärke (sum(eff)/size),
+         damit große Packs nicht dominieren.
+      4. Zucht ist Crossover innerhalb des Packs, mit ``migration_rate`` Genfluss zwischen Packs.
+      5. Allzeit-Beste + Top-Hall-of-Fame-Eliten werden immer übernommen.
     """
-    fit = np.asarray(fitnesses, dtype=np.float64)
+    fitness_arr = np.asarray(fitnesses, dtype=np.float64)
     pack_ids = np.asarray(pack_ids)
-    uniq = np.unique(pack_ids)
+    unique_packs = np.unique(pack_ids)
 
-    pack_best = {int(p): fit[pack_ids == p].max() for p in uniq}
-    eff = np.array([f + pack_support * max(0.0, pack_best[int(p)] - f)
-                    for f, p in zip(fit, pack_ids)])
+    # Bester Score je Pack, dann "effektive" Fitness: schwache Mitglieder werden
+    # anteilig (pack_support) zum Pack-Besten hochgezogen.
+    pack_best = {int(p): fitness_arr[pack_ids == p].max() for p in unique_packs}
+    effective_fitness = np.array(
+        [own + pack_support * max(0.0, pack_best[int(p)] - own)
+         for own, p in zip(fitness_arr, pack_ids)])
 
     new_pop: list = []
 
-    # ── Global elites: never lose the all-time best / top hall of fame ──
+    # ── Globale Eliten: Allzeit-Beste / Top-Hall-of-Fame nie verlieren ──
     if best_ever_w is not None:
         new_pop.append(best_ever_w.copy())
-    for w in hof_weights[:2]:
+    for elite_weights in hof_weights[:2]:
         if len(new_pop) < n_pop:
-            new_pop.append(w.copy())
+            new_pop.append(elite_weights.copy())
 
-    # ── Per-pack survivors (members preserve global fitness-desc order) ──
-    pack_members = {int(p): np.where(pack_ids == p)[0] for p in uniq}
+    # ── Pro-Pack-Überlebende (Mitglieder behalten globale Fitness-desc-Reihenfolge) ──
+    pack_members = {int(p): np.where(pack_ids == p)[0] for p in unique_packs}
     for members in pack_members.values():
-        for idx in members[:min_survivors]:
+        for member_idx in members[:min_survivors]:
             if len(new_pop) < n_pop:
-                new_pop.append(weights_out[idx].copy())
+                new_pop.append(weights_out[member_idx].copy())
 
-    # ── Allocate remaining slots to packs ∝ fitness-shared strength ──
-    strengths = np.array([eff[m].sum() / len(m) for m in pack_members.values()])
+    # ── Restplätze den Packs ∝ fitness-geteilter Stärke zuteilen ──
+    strengths = np.array([effective_fitness[members].sum() / len(members)
+                          for members in pack_members.values()])
     strengths = strengths - strengths.min() + 1e-6
     pack_probs = strengths / strengths.sum()
     pack_keys = list(pack_members.keys())
 
     while len(new_pop) < n_pop:
         if np.random.random() < migration_rate and len(pack_keys) > 1:
-            # Cross-pack crossover — gene flow between packs
-            ia, ib = np.random.choice(len(pack_keys), 2, replace=False)
-            pa = _select_in_pack(weights_out, pack_members[pack_keys[ia]])
-            pb = _select_in_pack(weights_out, pack_members[pack_keys[ib]])
+            # Crossover zwischen Packs — Genfluss
+            idx_a, idx_b = np.random.choice(len(pack_keys), 2, replace=False)
+            parent_a = _select_in_pack(weights_out, pack_members[pack_keys[idx_a]])
+            parent_b = _select_in_pack(weights_out, pack_members[pack_keys[idx_b]])
         else:
-            p = pack_keys[np.random.choice(len(pack_keys), p=pack_probs)]
-            members = pack_members[p]
-            pa = _select_in_pack(weights_out, members)
-            pb = _select_in_pack(weights_out, members)
-        child = crossover(pa, pb)
+            chosen_pack = pack_keys[np.random.choice(len(pack_keys), p=pack_probs)]
+            members = pack_members[chosen_pack]
+            parent_a = _select_in_pack(weights_out, members)
+            parent_b = _select_in_pack(weights_out, members)
+        child = crossover(parent_a, parent_b)
         child = mutate(child, mutation_rate, mutation_noise)
         new_pop.append(child)
 

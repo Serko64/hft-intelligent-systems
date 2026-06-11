@@ -9,6 +9,10 @@ export const MODEL_YAW_OFFSET = Math.PI/2 // rotate the car model if it faces th
 const MODEL_PITCH = Math.PI /2 // lay a typical Y-up GLB flat onto the ground (z-up world)
 const MODEL_URL = "/models/f1.glb"
 
+// Sensor-Strahlen des angeklickten Autos (spiegelt environment.py: RAY_ANGLES / MAX_RAY_M).
+const RAY_ANGLES_RAD = [-75, -45, -20, 0, 20, 45, 75].map((d) => (d * Math.PI) / 180)
+const MAX_RAY_M = 80
+
 const GRASS = 0x2f6b22 // lively green so the dark track + red kerb pop
 const ASPHALT = 0x37352f // racing surface (FIA cross-section "Strecke")
 const WALL = 0xf4f4ee // bright white track-limit line
@@ -47,6 +51,7 @@ interface CarObj {
   group: THREE.Group
   bodyMaterials: ColorMat[] // materials tinted per-frame by rank
   hasModel: boolean
+  lastHex: number // zuletzt gesetzte Farbe — vermeidet überflüssige setHex-Aufrufe pro Frame
 }
 
 export type CarStyle = "model" | "box" // "box" = cheap primitive for performance
@@ -71,6 +76,7 @@ export class TrackScene {
   private selectedIndex: number | null = null
   private onCarSelect: ((i: number | null) => void) | null = null
   private selectionRing: THREE.Mesh
+  private raysObj: THREE.LineSegments // Sensor-Strahlen des selektierten Autos
   private raycaster = new THREE.Raycaster()
   private pointerDown: { x: number; y: number } | null = null
   private modelTemplate: THREE.Object3D | null = null
@@ -128,6 +134,16 @@ export class TrackScene {
     this.selectionRing.visible = false
     this.selectionRing.renderOrder = 11
     this.scene.add(this.selectionRing)
+
+    // Sensor-Strahlen (7 Linien) des angeklickten Autos. Geometrie wird EINMAL
+    // angelegt und pro Frame nur befüllt (kein Neu-Erzeugen), siehe updateRays().
+    const rayGeo = new THREE.BufferGeometry()
+    rayGeo.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(RAY_ANGLES_RAD.length * 2 * 3), 3))
+    rayGeo.setAttribute("color", new THREE.Float32BufferAttribute(new Float32Array(RAY_ANGLES_RAD.length * 2 * 3), 3))
+    this.raysObj = new THREE.LineSegments(rayGeo, new THREE.LineBasicMaterial({ vertexColors: true }))
+    this.raysObj.visible = false
+    this.raysObj.renderOrder = 12
+    this.scene.add(this.raysObj)
 
     // Click a car to select it (only when the pointer barely moved, so orbiting
     // the camera doesn't trigger a selection).
@@ -450,6 +466,10 @@ export class TrackScene {
 
   // ── Per-frame update ────────────────────────────────────────────────────────
   private loop() {
+    this.raf = requestAnimationFrame(this.loop)
+    // Bei verstecktem Tab nicht rendern/rechnen — spart GPU/CPU im Hintergrund.
+    if (document.hidden) return
+
     const cars = this.getCars()
     this.syncPool(cars.length)
     for (let i = 0; i < this.carPool.length; i++) {
@@ -465,21 +485,59 @@ export class TrackScene {
       const hex = this.colorMode === "generation"
         ? genColorHex(c.generation)
         : rankColorHex(i, cars.length)
-      for (const m of obj.bodyMaterials) m.color.setHex(hex)
+      // Nur umfärben, wenn sich die Farbe wirklich geändert hat (spart ~40 Autos
+      // × N Materialien setHex pro Frame).
+      if (hex !== obj.lastHex) {
+        for (const m of obj.bodyMaterials) m.color.setHex(hex)
+        obj.lastHex = hex
+      }
     }
 
-    // Park the selection ring under the selected car (if any & still present).
+    // Park the selection ring under the selected car (if any & still present),
+    // and draw the rays that car's sensors currently see.
     const sel = this.selectedIndex
     if (sel !== null && sel < cars.length) {
       this.selectionRing.visible = true
       this.selectionRing.position.set(cars[sel].x, cars[sel].y, 0.1)
+      this.updateRays(cars[sel])
     } else {
       this.selectionRing.visible = false
+      this.raysObj.visible = false
     }
 
     this.controls.update()
     this.renderer.render(this.scene, this.camera)
-    this.raf = requestAnimationFrame(this.loop)
+  }
+
+  /** Zeichnet die 7 Sensor-Strahlen des angeklickten Autos: Ursprung = Auto,
+   *  Länge = gemessener Abstand (`ray·MAX_RAY_M`), Farbe rot (Wand nah) → grün
+   *  (frei). Aktualisiert nur die vorhandenen Attribute, baut keine Geometrie neu. */
+  private updateRays(c: Car) {
+    const rays = c.rays
+    if (!rays || rays.length < RAY_ANGLES_RAD.length) {
+      this.raysObj.visible = false
+      return
+    }
+    const geo = this.raysObj.geometry
+    const pos = geo.attributes.position as THREE.BufferAttribute
+    const col = geo.attributes.color as THREE.BufferAttribute
+    const z = 0.7
+    const color = new THREE.Color()
+    for (let i = 0; i < RAY_ANGLES_RAD.length; i++) {
+      const r = Math.min(1, Math.max(0, rays[i]))
+      const ang = c.heading + RAY_ANGLES_RAD[i]
+      const dist = r * MAX_RAY_M
+      const ex = c.x + Math.cos(ang) * dist
+      const ey = c.y + Math.sin(ang) * dist
+      pos.setXYZ(i * 2, c.x, c.y, z)
+      pos.setXYZ(i * 2 + 1, ex, ey, z)
+      color.setHSL(r * 0.33, 1, 0.5) // 0=rot (nah) … 0.33=grün (frei)
+      col.setXYZ(i * 2, color.r, color.g, color.b)
+      col.setXYZ(i * 2 + 1, color.r, color.g, color.b)
+    }
+    pos.needsUpdate = true
+    col.needsUpdate = true
+    this.raysObj.visible = true
   }
 
   /** Switch car bodies between the full GLB model and a cheap box (performance).
@@ -533,12 +591,14 @@ export class TrackScene {
     )
     this.raycaster.setFromCamera(ndc, this.camera)
     const groups = this.carPool.map((o) => o.group)
+    const groupIndex = new Map(groups.map((g, i) => [g, i]))
     const hits = this.raycaster.intersectObjects(groups, true)
     let picked: number | null = null
     if (hits.length) {
+      // Vom getroffenen Mesh die Eltern hoch bis zur Auto-Gruppe laufen.
       let o: THREE.Object3D | null = hits[0].object
-      while (o && !groups.includes(o as THREE.Group)) o = o.parent
-      if (o) picked = groups.indexOf(o as THREE.Group)
+      while (o && !groupIndex.has(o as THREE.Group)) o = o.parent
+      if (o) picked = groupIndex.get(o as THREE.Group) ?? null
     }
     this.selectedIndex = picked
     this.onCarSelect?.(picked)
@@ -556,7 +616,7 @@ export class TrackScene {
 
   private makeCar(): CarObj {
     const group = new THREE.Group()
-    const obj: CarObj = { group, bodyMaterials: [], hasModel: false }
+    const obj: CarObj = { group, bodyMaterials: [], hasModel: false, lastHex: -1 }
     if (this.carStyle === "box") {
       const box = this.makeBoxBody()
       group.add(box)
@@ -620,6 +680,7 @@ export class TrackScene {
 
     obj.group.add(body)
     obj.bodyMaterials = mats
+    obj.lastHex = -1 // neue Materialien → Farb-Cache zurücksetzen
     obj.hasModel = true
   }
 
@@ -666,6 +727,8 @@ export class TrackScene {
     this.canvas.removeEventListener("pointerup", this.onPointerUp)
     this.selectionRing.geometry.dispose()
     ;(this.selectionRing.material as THREE.Material).dispose()
+    this.raysObj.geometry.dispose()
+    ;(this.raysObj.material as THREE.Material).dispose()
     this.resizeObs.disconnect()
     this.controls.dispose()
     this.renderer.dispose()

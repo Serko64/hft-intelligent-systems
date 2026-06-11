@@ -48,25 +48,6 @@ function HudImpl({ carsRef, stats }: Props) {
             <Row label="Epsilon" value={stats.epsilon.toFixed(3)} />
           </>
         )}
-
-        {stats && stats.top_scores.length > 0 && (
-          <div className="mt-2">
-            <div className="h-px bg-border my-1" />
-            <div className="mb-1 text-xs font-semibold text-muted-foreground">Top 10</div>
-            <ol className="space-y-0.5 text-xs">
-              {stats.top_scores.slice(0, 10).map(([score, gen], i) => (
-                <li key={`${gen}-${i}`} className="flex justify-between tabular-nums">
-                  <span className={i === 0 ? "font-semibold text-yellow-400" : "text-muted-foreground"}>
-                    {i + 1}. Gen {gen}
-                  </span>
-                  <span className={i === 0 ? "font-semibold text-yellow-400" : "font-medium"}>
-                    {score.toFixed(0)}
-                  </span>
-                </li>
-              ))}
-            </ol>
-          </div>
-        )}
       </CardContent>
     </Card>
   )

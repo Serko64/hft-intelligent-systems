@@ -9,14 +9,15 @@ import numpy as np
 import pygame
 
 from f1_rl.config import ACCENT, BG, CANVAS_H, CANVAS_W, DIM, FPS, GOLD, SEL_BG, TEXT
+from f1_rl.learning.agent import act
 from f1_rl.simulation.environment import F1Env, N_CHECKPOINTS
 from f1_rl.simulation.track_loader import meters_to_pixels
 from f1_rl.simulation.track_render import GRASS_COLOR
-from f1_rl.ui.camera import (
+from old_ui.ui.camera import (
     _draw_checkpoints_overlay, _draw_scene, _get_glow_surf,
     _get_track_surface, _get_zoomed_track_surface, _world_to_screen,
 )
-from f1_rl.ui.hud import draw_hud, draw_throttle_graph
+from old_ui.ui.hud import draw_hud, draw_throttle_graph
 
 
 # ── Replay browser ────────────────────────────────────────────────────────────
@@ -196,7 +197,7 @@ def run_visualization(screen, clock, fonts, model, track,
                     zoom = 1.0
 
         if not paused:
-            action, _ = model.predict(obs, deterministic=True)
+            action = act(model, obs)
             obs, _, terminated, _, info = env.step(action)
             throttle_hist.append(env._last_throttle)
             if info.get("lap_complete"):

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react"
 import type { ClientMsg } from "@/lib/types"
+import { api } from "@/lib/bridge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -40,6 +41,7 @@ export function ControlPanel({
   const [useRays, setUseRays] = useState(true)
   const [speed, setSpeed] = useState(3) // live-view sub-steps per frame (matches SIM_SPEED_DEFAULT)
   const [autoSpeed, setAutoSpeed] = useState(true) // sync animation to generation compute time
+  const [driveBackend, setDriveBackend] = useState<"dqn" | "qtable">("dqn") // welches Modell „Laden & Fahren" lädt
 
   const selectCircuit = (name: string) => {
     setCircuit(name)
@@ -47,11 +49,11 @@ export function ControlPanel({
   }
 
   useEffect(() => {
-    fetch("/api/circuits")
-      .then((r) => r.json())
-      .then((d: { circuits: string[] }) => {
-        setCircuits(d.circuits)
-        if (d.circuits.length) selectCircuit(d.circuits[0])
+    api()
+      .then((a) => a.list_circuits())
+      .then((list: string[]) => {
+        setCircuits(list)
+        if (list.length) selectCircuit(list[0])
       })
       .catch(() => undefined)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -67,7 +69,7 @@ export function ControlPanel({
       circuit,
       steps_per_gen: steps,
       total_gens: gens,
-      evolution_mode: qtable ? "qtable" : pack ? "pack" : "classic",
+      evolution_mode: qtable ? (pack ? "qtable_pack" : "qtable") : pack ? "pack" : "classic",
       resume,
       use_rays: useRays,
       auto_speed: autoSpeed,
@@ -185,10 +187,10 @@ export function ControlPanel({
           </Label>
         </div>
 
-        {/* Pack mode — only meaningful for the genetic DQN, so disabled in Q-table mode */}
+        {/* Pack mode — works for both the genetic DQN and the Q-table backend */}
         <div className="flex items-center gap-2">
-          <Checkbox id="pack" checked={pack} disabled={qtable} onCheckedChange={(v) => setPack(Boolean(v))} />
-          <Label htmlFor="pack" className={`cursor-pointer ${qtable ? "text-muted-foreground/50" : ""}`}>
+          <Checkbox id="pack" checked={pack} onCheckedChange={(v) => setPack(Boolean(v))} />
+          <Label htmlFor="pack" className="cursor-pointer">
             Rudel-Evolution (Pack-Modus)
           </Label>
         </div>
@@ -211,6 +213,20 @@ export function ControlPanel({
 
         <Separator />
 
+        {/* Fahrmodell: welches gespeicherte Modell „Laden & Fahren" fährt */}
+        <div className="space-y-2">
+          <Label>Fahrmodell (Laden &amp; Fahren)</Label>
+          <Select value={driveBackend} onValueChange={(v) => setDriveBackend(v as "dqn" | "qtable")}>
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="dqn">DQN (neuronales Netz)</SelectItem>
+              <SelectItem value="qtable">Q-Table</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
         {/* Actions */}
         <div className="grid grid-cols-2 gap-2">
           <Button className="col-span-2" disabled={!connected || !circuit} onClick={() => startTraining(false)}>
@@ -219,7 +235,7 @@ export function ControlPanel({
           <Button variant="secondary" disabled={!connected || !circuit} onClick={() => startTraining(true)}>
             Fortsetzen
           </Button>
-          <Button variant="secondary" disabled={!connected || !circuit} onClick={() => onSend({ type: "load_and_drive", circuit, use_rays: useRays })}>
+          <Button variant="secondary" disabled={!connected || !circuit} onClick={() => onSend({ type: "load_and_drive", circuit, use_rays: useRays, backend: driveBackend })}>
             Laden & Fahren
           </Button>
           <Button className="col-span-2" variant="destructive" disabled={!running} onClick={() => onSend({ type: "stop" })}>

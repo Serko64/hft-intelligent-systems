@@ -55,7 +55,6 @@ export interface StatsMsg {
   best_fitness: number
   mean_fitness: number
   n_packs: number
-  top_scores: [number, number][]
 }
 
 export interface StatusMsg {
@@ -82,15 +81,14 @@ export interface InspectMsg {
   action: number // greedy (chosen) action index
 }
 
-// The full learned Q-table of the inspected car (q-table backend only).
-// states[i] is a discretised state (bin indices), values[i] its N_ACTIONS Q-row.
+// The inspected car's Q-table for the heatmap (q-table backend only). Slim payload:
+// values[i] is one row's N_ACTIONS Q-values (capped/down-sampled server-side);
+// n_states is the true total state count (for the caption, may exceed values.length).
 export interface QTableMsg {
   type: "qtable"
   index: number
-  states: number[][]
+  n_states: number
   values: number[][]
-  feature_idx: number[]
-  n_bins: number
 }
 
 export type ServerMsg = TrackMsg | FrameMsg | StatsMsg | StatusMsg | RacingLineMsg | InspectMsg | QTableMsg
@@ -102,12 +100,12 @@ export type ClientMsg =
       circuit: string
       steps_per_gen: number
       total_gens: number
-      evolution_mode: "classic" | "pack" | "qtable"
+      evolution_mode: "classic" | "pack" | "qtable" | "qtable_pack"
       resume: boolean
       use_rays: boolean
       auto_speed: boolean
     }
-  | { type: "load_and_drive"; circuit: string; use_rays: boolean }
+  | { type: "load_and_drive"; circuit: string; use_rays: boolean; backend: "dqn" | "qtable" }
   | { type: "set_speed"; value: number }
   | { type: "inspect_car"; index: number | null }
   | { type: "stop" }

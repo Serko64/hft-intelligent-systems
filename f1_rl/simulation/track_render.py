@@ -1,4 +1,4 @@
-"""Track rendering: bake a TrackData into a pygame surface (asphalt, kerbs,
+"""Track rendering: bake a Track dict into a pygame surface (asphalt, kerbs,
 boundary lines, dashed centerline). The baked surface is cached per track so
 it is only drawn once.
 """
@@ -8,7 +8,7 @@ import math
 
 import pygame
 
-from f1_rl.simulation.track_loader import TrackData
+from f1_rl.simulation.track_loader import Track
 
 GRASS_COLOR = (18, 38, 18)
 
@@ -43,21 +43,21 @@ def _draw_kerbs(surface, pts: list, kerb_px: float, thickness: int) -> None:
                 ci += 1
 
 
-def _bake_track(track: TrackData) -> object:
+def _bake_track(track: Track) -> object:
     """Render track once at 3× resolution, smoothscale to native — gives free AA."""
     S = 3  # supersampling factor
 
-    big = pygame.Surface((track.canvas_w * S, track.canvas_h * S))
+    big = pygame.Surface((track["canvas_w"] * S, track["canvas_h"] * S))
     big.fill(GRASS_COLOR)
 
     def sc(pts):
         return [(x * S, y * S) for x, y in pts]
 
-    pts_out = sc([(float(p[0]), float(p[1])) for p in track.corridor_px])
-    pts_ctr = sc([(float(p[0]), float(p[1])) for p in track.centerline_px])
+    pts_out = sc([(float(p[0]), float(p[1])) for p in track["corridor_px"]])
+    pts_ctr = sc([(float(p[0]), float(p[1])) for p in track["centerline_px"]])
     pts_inn = (
-        sc([(float(p[0]), float(p[1])) for p in track.corridor_interior_px])
-        if track.corridor_interior_px is not None else None
+        sc([(float(p[0]), float(p[1])) for p in track["corridor_interior_px"]])
+        if track["corridor_interior_px"] is not None else None
     )
 
     # Shadow
@@ -101,10 +101,10 @@ def _bake_track(track: TrackData) -> object:
                     2 * S,
                 )
 
-    return pygame.transform.smoothscale(big, (track.canvas_w, track.canvas_h))
+    return pygame.transform.smoothscale(big, (track["canvas_w"], track["canvas_h"]))
 
 
-def draw_track(surface, track: TrackData) -> None:
+def draw_track(surface, track: Track) -> None:
     key = id(track)
     if key not in _BAKED_TRACK_CACHE:
         _BAKED_TRACK_CACHE[key] = _bake_track(track)

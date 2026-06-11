@@ -22,21 +22,21 @@ from f1_rl.config import (
 )
 from f1_rl.learning.trainer import load_training_state
 from f1_rl.simulation.track_loader import load_track, meters_to_pixels
-from f1_rl.ui.camera import _world_to_screen
-from f1_rl.ui.menu_view import (
+from old_ui.ui.camera import _world_to_screen
+from old_ui.ui.menu_view import (
     MENU_ITEM_H, MENU_LIST_TOP, MENU_LIST_W, MENU_LIST_X, MENU_VISIBLE,
     draw_menu, menu_action_rects, menu_param_rects, param_arrow_zones,
 )
-from f1_rl.ui.replay_view import (
+from old_ui.ui.replay_view import (
     REPLAY_BAR_H, REPLAY_BAR_W, REPLAY_BAR_X, REPLAY_BAR_Y,
     draw_replay, draw_replay_browser, run_visualization,
 )
-from f1_rl.ui.storage import (
+from old_ui.ui.storage import (
     ReplayState, load_best_laps, load_replay_list,
     open_replay_file, save_best_lap, try_open_training_replay,
 )
-from f1_rl.ui.theme import make_fonts
-from f1_rl.ui.training_view import (
+from old_ui.ui.theme import make_fonts
+from old_ui.ui.training_view import (
     TOP_PANEL_W, TOP_PANEL_X0, TOP_PANEL_Y0, TOP_ROW_FIRST_Y, TOP_ROW_H,
     draw_training, training_widget_rects,
 )
@@ -194,10 +194,10 @@ def main():
     def _load_and_drive() -> None:
         nonlocal loaded_track, loaded_model, state
         if os.path.exists(MODEL_PATH):
-            from f1_rl.learning.agent import NeuralAgent
+            from f1_rl.learning.agent import neuronal_net_from_weight_file
             query, fallback, hw = CIRCUITS[sel_idx]
             loaded_track = load_track(query, geojson_fallback_path=fallback, half_width_m=hw)
-            loaded_model = NeuralAgent.load(MODEL_PATH)
+            loaded_model = neuronal_net_from_weight_file(MODEL_PATH)
             state = "visualization"
         else:
             print("[main] No model found at", MODEL_PATH)
@@ -300,11 +300,11 @@ def main():
                             state = "training"
                         if event.key == pygame.K_l:
                             if os.path.exists(MODEL_PATH):
-                                from f1_rl.learning.agent import NeuralAgent
+                                from f1_rl.learning.agent import neuronal_net_from_weight_file
                                 query, fallback, hw = CIRCUITS[sel_idx]
                                 loaded_track = load_track(query, geojson_fallback_path=fallback,
                                                           half_width_m=hw)
-                                loaded_model = NeuralAgent.load(MODEL_PATH)
+                                loaded_model = neuronal_net_from_weight_file(MODEL_PATH)
                                 state = "visualization"
                             else:
                                 print("[main] No model found at", MODEL_PATH)

@@ -13,13 +13,13 @@ from f1_rl.config import CANVAS_H, CANVAS_W, DIM, GOLD, GREEN
 from f1_rl.simulation.environment import N_CHECKPOINTS, REWARD_PARTS
 from f1_rl.simulation.track_loader import meters_to_pixels
 from f1_rl.simulation.track_render import GRASS_COLOR
-from f1_rl.ui.camera import (
+from old_ui.ui.camera import (
     _draw_checkpoints_overlay, _draw_rays, _get_glow_surf,
     _get_track_surface, _get_zoomed_track_surface, _world_to_screen,
 )
-from f1_rl.ui.hud import draw_throttle_graph
-from f1_rl.ui.theme import draw_star, pack_color, rank_color_size
-from f1_rl.ui.widgets import draw_button, draw_checkbox
+from old_ui.ui.hud import draw_throttle_graph
+from old_ui.ui.theme import draw_star, pack_color, rank_color_size
+from old_ui.ui.widgets import draw_button, draw_checkbox
 
 # Human-readable labels for each reward component (order matches env.REWARD_PARTS)
 REWARD_LABELS = {

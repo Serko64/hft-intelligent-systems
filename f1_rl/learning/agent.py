@@ -1,13 +1,14 @@
-"""Inference helpers: turn a flat weight vector into a driving policy.
+"""Inferenz-Helfer: macht aus einem flachen Gewichtsvektor eine fahrbare Policy.
 
-A "policy" here is just a ready-to-use PyTorch network. A few small functions are
-all the rest of the project needs:
+Eine „Policy" ist hier einfach ein fertiges PyTorch-Netz. Der Rest des Projekts
+braucht nur diese kleinen Funktionen:
 
-  policy_from_weights(w) -> net   build a network from an in-memory weight vector
-  load_policy(path)      -> net   same, but load the weights from a .npy file
-  act(net, obs)          -> action  pick the greedy action (highest Q-value)
+  neuronal_net_from_weights(w)        -> net   Netz aus einem Gewichtsvektor bauen
+  neuronal_net_from_weight_file(path) -> net   dasselbe, Gewichte aus .npy-Datei laden
+  act(net, obs)                       -> action  beste Aktion (höchster Q-Wert)
+  forward_trace(net, obs)             -> (q_values, hidden)  Detail-Ansicht fürs UI
 
-Used by the live display, replay recording, and the "load & drive" view.
+Genutzt von der Live-Anzeige, der Racing-Line-Aufzeichnung und der „Laden & Fahren"-Ansicht.
 """
 from __future__ import annotations
 
@@ -16,8 +17,8 @@ import torch
 
 from f1_rl.learning.network import flat_to_network
 
-# Inference is single-sample and runs in the UI/server thread — one thread is
-# plenty and avoids torch spawning background threads that fight the render loop.
+# Inferenz läuft Einzel-Sample im UI-/Server-Thread — ein Thread reicht und
+# verhindert, dass torch Hintergrund-Threads startet, die die Renderschleife stören.
 try:
     torch.set_num_threads(1)
 except RuntimeError:
@@ -26,35 +27,35 @@ except RuntimeError:
 __all__ = ["neuronal_net_from_weights", "neuronal_net_from_weight_file", "act", "forward_trace"]
 
 
-# Definition eines Neuronalen Netzes auf basis von vordefinierten gewichten für die jeweilige instanz
+# Baut ein neuronales Netz aus einem vorgegebenen Gewichtsvektor.
 def neuronal_net_from_weights(weights: np.ndarray) -> torch.nn.Module:
-    """Build a ready-for-inference network from a flat weight vector."""
+    """Baut aus einem flachen Gewichtsvektor ein inferenzbereites Netz."""
     net = flat_to_network(np.asarray(weights, dtype=np.float32))
     net.eval()
     return net
 
 
-# Abrufen der gewichte für das neuronale netz aus einer Datei
+# Lädt die Netz-Gewichte aus einer Datei.
 def neuronal_net_from_weight_file(path: str) -> torch.nn.Module:
-    """Load a flat weight vector from ``path`` (.npy) into a ready network."""
+    """Lädt einen flachen Gewichtsvektor aus ``path`` (.npy) in ein fertiges Netz."""
     npy = path if path.endswith(".npy") else path + ".npy"
     return neuronal_net_from_weights(np.load(npy))
 
 
 def act(net: torch.nn.Module, obs: np.ndarray) -> int:
-    """Return the greedy action (index of the highest Q-value) for one observation."""
+    """Beste Aktion (Index des höchsten Q-Werts) für eine Beobachtung."""
     with torch.no_grad():
         x = torch.from_numpy(np.asarray(obs, dtype=np.float32)).unsqueeze(0)
         return int(net(x).argmax(dim=1).item())
 
 
 def forward_trace(net: torch.nn.Module, obs: np.ndarray) -> tuple[np.ndarray, list[np.ndarray]]:
-    """Run one forward pass and return (q_values, hidden_activations).
+    """Ein Vorwärtsdurchlauf, gibt (q_values, hidden_activations) zurück.
 
-    q_values is the output layer (one Q per action — the DQN "Q-table" for this
-    state). hidden_activations is the post-ReLU activation vector of each hidden
-    layer, so the UI can visualise the network lighting up. Cheap: a single
-    sample through a tiny MLP.
+    q_values ist die Ausgabeschicht (ein Q je Aktion — die DQN-„Q-Tabelle" dieses
+    Zustands). hidden_activations ist der Post-ReLU-Aktivierungsvektor jeder
+    versteckten Schicht, damit das UI das „Aufleuchten" des Netzes zeigen kann.
+    Billig: ein Sample durch ein winziges MLP.
     """
     import torch.nn as nn
     hidden: list[np.ndarray] = []

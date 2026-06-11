@@ -1,8 +1,9 @@
-"""Track loading: build a TrackData object from OSM or a GeoJSON file.
+"""Streckenladen: baut ein Track-Dict aus OSM-Daten oder einer GeoJSON-Datei.
 
-A TrackData holds everything the rest of the app needs about one circuit:
-the centerline (in metres), the drivable corridor, and pre-computed pixel
-coordinates for drawing. Rendering lives in track_render.py.
+Ein Track ist ein einfaches Dict (Typ-Beschreibung: ``Track``) und enthält alles,
+was der Rest der App über eine Strecke wissen muss: die Centerline (in Metern),
+den befahrbaren Korridor und vorberechnete Pixel-Koordinaten fürs Zeichnen.
+Das Zeichnen selbst lebt in track_render.py.
 """
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ import json
 import math
 import os
 import pickle
-from dataclasses import dataclass
+from typing import TypedDict
 
 import numpy as np
 import shapely.ops
@@ -23,57 +24,63 @@ CANVAS_H = 1000
 PAD = 80
 
 CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "circuits", "_cache")
+# Version des Cache-Formats. Hochzählen, wenn sich der Aufbau des Track-Dicts
+# ändert — alte Cache-Dateien werden dann einfach ignoriert und neu gebaut.
+TRACK_CACHE_VERSION = 2
 
 
-@dataclass
-class TrackData:
+class Track(TypedDict):
+    """Typ-Beschreibung für das Track-Dict (keine echte Klasse — zur Laufzeit
+    ist ein Track ein ganz normales Dict mit genau diesen Schlüsseln)."""
     name: str
-    centerline_m: LineString
-    corridor: Polygon
+    centerline_m: LineString    # Streckenmitte in Metern (shapely-Linie)
+    corridor: Polygon           # befahrbare Fläche (Centerline ± half_width_m)
     total_length_m: float
-    centerline_px: np.ndarray   # (N, 2) float32
-    corridor_px: np.ndarray     # (M, 2) float32, exterior ring
+    centerline_px: np.ndarray   # (N, 2) float32 — Pixel-Koordinaten fürs Zeichnen
+    corridor_px: np.ndarray     # (M, 2) float32 — äußerer Rand in Pixeln
     canvas_w: int
     canvas_h: int
-    px_scale: float
+    px_scale: float             # Meter → Pixel Umrechnungsfaktor
     px_origin_x: float
-    px_origin_y: float          # Y-flipped
-    bounds_center: tuple[float, float]   # (cx_m, cy_m)
-    half_diag_m: float
-    half_width_m: float              # corridor half-width used for OOB check
-    corridor_interior_px: np.ndarray | None  # (M, 2) float32, inner ring or None
+    px_origin_y: float          # Y ist gespiegelt (Bildschirm-Y wächst nach unten)
+    bounds_center: tuple[float, float]   # Mittelpunkt der Strecke (Meter)
+    half_diag_m: float          # halbe Diagonale der Bounding-Box (zur Normierung)
+    half_width_m: float         # halbe Streckenbreite — für die Crash-Prüfung
+    corridor_interior_px: np.ndarray | None  # innerer Rand in Pixeln, oder None
 
 
-def _project_linestring(ls: LineString) -> tuple[LineString, Transformer]:
-    centroid = ls.centroid
-    proj = (
+def _project_linestring(line_wgs84: LineString) -> tuple[LineString, Transformer]:
+    """Projiziert GPS-Koordinaten (Längen-/Breitengrad) in ein lokales Meter-System."""
+    centroid = line_wgs84.centroid
+    projection = (
         f"+proj=tmerc +lat_0={centroid.y} +lon_0={centroid.x}"
         " +units=m +datum=WGS84 +no_defs"
     )
-    tf = Transformer.from_crs("EPSG:4326", proj, always_xy=True)
-    return shapely.ops.transform(tf.transform, ls), tf
+    transformer = Transformer.from_crs("EPSG:4326", projection, always_xy=True)
+    return shapely.ops.transform(transformer.transform, line_wgs84), transformer
 
 
-def _build_track_data(
+def _build_track(
     name: str,
     centerline_wgs84: LineString,
     canvas_w: int = CANVAS_W,
     canvas_h: int = CANVAS_H,
     half_width_m: float = HALF_WIDTH_M,
     pad: int = PAD,
-) -> TrackData:
+) -> Track:
     centerline_m, _ = _project_linestring(centerline_wgs84)
     corridor = centerline_m.buffer(half_width_m, cap_style=2, join_style=2)
 
-    minx, miny, maxx, maxy = centerline_m.bounds
-    span_x = maxx - minx or 1e-9
-    span_y = maxy - miny or 1e-9
+    # Skalierung berechnen, damit die Strecke (mit Rand `pad`) auf die Canvas passt.
+    min_x, min_y, max_x, max_y = centerline_m.bounds
+    span_x = max_x - min_x or 1e-9
+    span_y = max_y - min_y or 1e-9
     usable_w = canvas_w - 2 * pad
     usable_h = canvas_h - 2 * pad
     scale = min(usable_w / span_x, usable_h / span_y)
 
-    origin_x = pad + (usable_w - span_x * scale) / 2 - minx * scale
-    origin_y = pad + (usable_h - span_y * scale) / 2 + maxy * scale
+    origin_x = pad + (usable_w - span_x * scale) / 2 - min_x * scale
+    origin_y = pad + (usable_h - span_y * scale) / 2 + max_y * scale
 
     def to_px(coords):
         return np.array(
@@ -85,27 +92,27 @@ def _build_track_data(
     corridor_px = to_px(corridor.exterior.coords)
     corridor_interior_px = to_px(corridor.interiors[0].coords) if corridor.interiors else None
 
-    cx = (minx + maxx) / 2
-    cy = (miny + maxy) / 2
+    center_x = (min_x + max_x) / 2
+    center_y = (min_y + max_y) / 2
     half_diag = math.hypot(span_x, span_y) / 2 + 1e-6
 
-    return TrackData(
-        name=name,
-        centerline_m=centerline_m,
-        corridor=corridor,
-        total_length_m=centerline_m.length,
-        centerline_px=centerline_px,
-        corridor_px=corridor_px,
-        canvas_w=canvas_w,
-        canvas_h=canvas_h,
-        px_scale=scale,
-        px_origin_x=origin_x,
-        px_origin_y=origin_y,
-        bounds_center=(cx, cy),
-        half_diag_m=half_diag,
-        half_width_m=half_width_m,
-        corridor_interior_px=corridor_interior_px,
-    )
+    return {
+        "name": name,
+        "centerline_m": centerline_m,
+        "corridor": corridor,
+        "total_length_m": centerline_m.length,
+        "centerline_px": centerline_px,
+        "corridor_px": corridor_px,
+        "canvas_w": canvas_w,
+        "canvas_h": canvas_h,
+        "px_scale": scale,
+        "px_origin_x": origin_x,
+        "px_origin_y": origin_y,
+        "bounds_center": (center_x, center_y),
+        "half_diag_m": half_diag,
+        "half_width_m": half_width_m,
+        "corridor_interior_px": corridor_interior_px,
+    }
 
 
 def load_track_osmnx(
@@ -114,23 +121,23 @@ def load_track_osmnx(
     canvas_h: int = CANVAS_H,
     half_width_m: float = HALF_WIDTH_M,
     pad: int = PAD,
-) -> TrackData:
+) -> Track:
     os.makedirs(CACHE_DIR, exist_ok=True)
     safe_name = "".join(c if c.isalnum() else "_" for c in query)
-    cache_path = os.path.join(CACHE_DIR, f"{safe_name}.pkl")
+    cache_path = os.path.join(CACHE_DIR, f"{safe_name}_v{TRACK_CACHE_VERSION}.pkl")
 
     if os.path.exists(cache_path):
         try:
             with open(cache_path, "rb") as f:
                 return pickle.load(f)
         except Exception as e:
-            # A stale or unreadable cache must never crash the app — just rebuild it.
+            # Ein kaputter Cache darf die App nie crashen — einfach neu bauen.
             print(f"[track] Ignoring unreadable cache {cache_path}: {e}")
 
     import osmnx as ox
 
-    # features_from_address searches within `dist` metres of the geocoded point,
-    # which is more reliable than features_from_place for named circuits.
+    # features_from_address sucht im Umkreis von `dist` Metern um den geocodierten
+    # Punkt — zuverlässiger als features_from_place für benannte Rennstrecken.
     try:
         gdf = ox.features_from_address(query, tags={"highway": "raceway"}, dist=10_000)
     except Exception:
@@ -151,7 +158,7 @@ def load_track_osmnx(
     if merged.geom_type == "MultiLineString":
         merged = max(merged.geoms, key=lambda g: g.length)
 
-    track = _build_track_data(query, merged, canvas_w, canvas_h, half_width_m, pad)
+    track = _build_track(query, merged, canvas_w, canvas_h, half_width_m, pad)
 
     with open(cache_path, "wb") as f:
         pickle.dump(track, f)
@@ -165,39 +172,39 @@ def load_track_geojson(
     canvas_h: int = CANVAS_H,
     half_width_m: float = HALF_WIDTH_M,
     pad: int = PAD,
-) -> TrackData:
+) -> Track:
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
 
     feature = data["features"][0]
-    geom = feature["geometry"]
-    props = feature["properties"]
-    name = props.get("Name", os.path.basename(path))
+    geometry = feature["geometry"]
+    properties = feature["properties"]
+    name = properties.get("Name", os.path.basename(path))
 
-    if geom["type"] == "LineString":
-        coords = geom["coordinates"]
+    if geometry["type"] == "LineString":
+        coords = geometry["coordinates"]
     else:
-        coords = [pt for part in geom["coordinates"] for pt in part]
+        coords = [pt for part in geometry["coordinates"] for pt in part]
 
-    # GeoJSON coords are [lon, lat]
+    # GeoJSON-Koordinaten sind [lon, lat]
     centerline_wgs84 = LineString(coords)
-    return _build_track_data(name, centerline_wgs84, canvas_w, canvas_h, half_width_m, pad)
+    return _build_track(name, centerline_wgs84, canvas_w, canvas_h, half_width_m, pad)
 
 
 def load_track(
     query: str,
     geojson_fallback_path: str | None = None,
     **kwargs,
-) -> TrackData:
-    # Prefer the curated GeoJSON over live OSM data when available.
+) -> Track:
+    # Die kuratierte GeoJSON-Datei hat Vorrang vor Live-OSM-Daten.
     if geojson_fallback_path and os.path.exists(geojson_fallback_path):
         print(f"[track] Using GeoJSON: {geojson_fallback_path}")
         return load_track_geojson(geojson_fallback_path, **kwargs)
     return load_track_osmnx(query, **kwargs)
 
 
-def meters_to_pixels(track: TrackData, x_m: float, y_m: float) -> tuple[float, float]:
+def meters_to_pixels(track: Track, x_m: float, y_m: float) -> tuple[float, float]:
     return (
-        track.px_origin_x + x_m * track.px_scale,
-        track.px_origin_y - y_m * track.px_scale,
+        track["px_origin_x"] + x_m * track["px_scale"],
+        track["px_origin_y"] - y_m * track["px_scale"],
     )

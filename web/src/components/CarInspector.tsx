@@ -65,6 +65,8 @@ export function CarInspector({ carsRef, index, inspect, qtable, onClose }: Props
 
       <Forces aLong={car.a_long} aLat={car.a_lat} />
 
+      <Sensors rays={car.rays} />
+
       <div>
         <div className="mb-0.5 text-xs font-semibold text-muted-foreground">Score-Zusammensetzung</div>
         {barData.length === 0 ? (
@@ -115,6 +117,35 @@ export function CarInspector({ carsRef, index, inspect, qtable, onClose }: Props
             )}
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+const MAX_RAY_M = 80 // spiegelt environment.MAX_RAY_M
+const RAY_LABELS = ["−75°", "−45°", "−20°", "0°", "+20°", "+45°", "+75°"]
+
+/** Was das Auto „sieht": die 7 Lidar-Strahlen (Abstand zur nächsten Wand) als
+ *  Balken, rot = Wand nah, grün = frei. Gleiche Daten wie die 3D-Strahlen. */
+function Sensors({ rays }: { rays: number[] }) {
+  if (!rays || rays.length === 0) return null
+  return (
+    <div>
+      <div className="mb-0.5 text-xs font-semibold text-muted-foreground">Sensoren (Sicht)</div>
+      <div className="space-y-0.5">
+        {rays.map((r, i) => {
+          const v = Math.min(1, Math.max(0, r))
+          const hue = v * 120 // 0=rot (nah) … 120=grün (frei)
+          return (
+            <div key={i} className="flex items-center gap-2 text-xs tabular-nums">
+              <span className="w-9 shrink-0 text-muted-foreground">{RAY_LABELS[i] ?? i}</span>
+              <div className="h-2 flex-1 overflow-hidden rounded bg-black/40">
+                <div className="h-full rounded" style={{ width: `${v * 100}%`, backgroundColor: `hsl(${hue} 90% 50%)` }} />
+              </div>
+              <span className="w-10 shrink-0 text-right">{(v * MAX_RAY_M).toFixed(0)} m</span>
+            </div>
+          )
+        })}
       </div>
     </div>
   )

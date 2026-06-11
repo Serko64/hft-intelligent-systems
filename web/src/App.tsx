@@ -6,13 +6,14 @@ import { FitnessChart } from "@/components/FitnessChart"
 import { RacingLineChart } from "@/components/RacingLineChart"
 import { CarInspector } from "@/components/CarInspector"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { useSimSocket } from "@/lib/useSimSocket"
+import { useSimBridge } from "@/lib/useSimBridge"
+import { api } from "@/lib/bridge"
 import type { TrackMsg } from "@/lib/types"
 import type { CarStyle, ColorMode } from "@/three/TrackScene"
 
 export default function App() {
   const { connected, status, statusMessage, track, stats, statsHistory, racingLine, inspect, qtable, carsRef, send } =
-    useSimSocket()
+    useSimBridge()
 
   // Car rendering style: full 3D model, or a cheap box for performance.
   const [carStyle, setCarStyle] = useState<CarStyle>("model")
@@ -30,8 +31,8 @@ export default function App() {
   // (sent when training/driving begins) takes precedence over the preview.
   const [preview, setPreview] = useState<TrackMsg | null>(null)
   const onCircuitChange = useCallback((name: string) => {
-    fetch(`/api/track?name=${encodeURIComponent(name)}`)
-      .then((r) => r.json())
+    api()
+      .then((a) => a.get_track(name))
       .then((d) => setPreview({ type: "track", ...d }))
       .catch(() => undefined)
   }, [])

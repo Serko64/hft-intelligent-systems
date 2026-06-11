@@ -1,18 +1,17 @@
-"""The one and only network definition — a small PyTorch MLP.
+"""Die einzige Netz-Definition — ein kleines PyTorch-MLP.
 
-Everything in the project uses *this* network:
-  - worker.py trains it with gradient descent (Double DQN),
-  - agent.py runs it to choose actions,
-  - the genetic algorithm stores its weights as a single flat float32 vector,
-    which makes crossover and mutation simple array operations.
+Alles im Projekt nutzt *dieses* Netz:
+  - worker.py trainiert es per Gradientenabstieg (Double DQN),
+  - agent.py lässt es Aktionen wählen,
+  - der genetische Algorithmus speichert seine Gewichte als einen flachen
+    float32-Vektor, was Crossover und Mutation zu einfachen Array-Operationen macht.
 
-Two tiny helpers convert between the PyTorch module and that flat vector:
-  flat_to_network(flat) -> nn.Module        (load weights into a network)
-  network_to_flat(net)  -> np.ndarray       (read weights out as a vector)
+Zwei winzige Helfer wandeln zwischen PyTorch-Modul und flachem Vektor:
+  flat_to_network(flat) -> nn.Module        (Gewichte ins Netz laden)
+  network_to_flat(net)  -> np.ndarray       (Gewichte als Vektor auslesen)
 
-Keeping a single definition here means there is no second hand-written copy of
-the network to keep in sync — change the architecture in config.NET_HIDDEN and
-the whole project follows.
+Eine einzige Definition heißt: keine zweite handgeschriebene Kopie, die man
+synchron halten muss — Architektur in config.NET_HIDDEN ändern, alles folgt.
 """
 from __future__ import annotations
 
@@ -24,17 +23,17 @@ from f1_rl.config import N_ACTIONS, N_OBS, NET_DROPOUT, NET_HIDDEN
 
 
 def build_network() -> nn.Sequential:
-    """Create a fresh network: N_OBS -> *NET_HIDDEN -> N_ACTIONS, with ReLU between layers.
+    """Baut ein frisches Netz: N_OBS -> *NET_HIDDEN -> N_ACTIONS, ReLU dazwischen.
 
-    With config.NET_DROPOUT > 0, a Dropout layer follows each hidden ReLU. Dropout
-    has no parameters, so the flat weight vector (n_params) is unchanged and stays
-    compatible with existing model.npy files.
+    Bei config.NET_DROPOUT > 0 folgt jedem versteckten ReLU eine Dropout-Schicht.
+    Dropout hat keine Parameter, der flache Gewichtsvektor (n_params) bleibt also
+    gleich und kompatibel zu bestehenden model.npy-Dateien.
     """
     sizes = [N_OBS, *NET_HIDDEN, N_ACTIONS]
     layers: list[nn.Module] = []
     for i in range(len(sizes) - 1):
         layers.append(nn.Linear(sizes[i], sizes[i + 1]))
-        if i < len(sizes) - 2:           # no activation on the output layer
+        if i < len(sizes) - 2:           # keine Aktivierung auf der Ausgabeschicht
             layers.append(nn.ReLU())
             if NET_DROPOUT > 0:
                 layers.append(nn.Dropout(NET_DROPOUT))
@@ -42,12 +41,12 @@ def build_network() -> nn.Sequential:
 
 
 def n_params() -> int:
-    """Total number of weights+biases in one network (depends on config)."""
+    """Gesamtzahl der Gewichte+Bias eines Netzes (hängt von der Config ab)."""
     return sum(p.numel() for p in build_network().parameters())
 
 
 def random_weights() -> np.ndarray:
-    """A fresh, randomly initialised weight vector (Xavier-uniform, zero biases)."""
+    """Frischer, zufällig initialisierter Gewichtsvektor (Xavier-uniform, Bias 0)."""
     net = build_network()
     with torch.no_grad():
         for module in net.modules():
@@ -59,7 +58,7 @@ def random_weights() -> np.ndarray:
 
 def flat_to_network(flat: np.ndarray, net: nn.Module | None = None,
                     device: str | torch.device = "cpu") -> nn.Module:
-    """Load a flat weight vector into a network (creating one if not given)."""
+    """Lädt einen flachen Gewichtsvektor in ein Netz (legt eins an, wenn keins gegeben)."""
     if net is None:
         net = build_network()
     net = net.to(device)
@@ -79,7 +78,7 @@ def flat_to_network(flat: np.ndarray, net: nn.Module | None = None,
 
 
 def network_to_flat(net: nn.Module) -> np.ndarray:
-    """Read a network's weights out as a single flat float32 vector."""
+    """Liest die Gewichte eines Netzes als einen flachen float32-Vektor aus."""
     parts: list[np.ndarray] = []
     with torch.no_grad():
         for module in net.modules():

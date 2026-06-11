@@ -15,7 +15,7 @@ from f1_rl.config import (
     ACCENT, BG, CANVAS_H, CANVAS_W, CIRCUITS, DIM, GENS_PRESETS, GOLD, GREEN,
     HOV_BG, MODEL_PATH, SEL_BG, STEPS_PRESETS, TEXT,
 )
-from f1_rl.ui.widgets import draw_button, draw_checkbox
+from old_ui.ui.widgets import draw_button, draw_checkbox
 
 
 # ── Track preview (menu) ──────────────────────────────────────────────────────

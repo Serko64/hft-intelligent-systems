@@ -8,17 +8,15 @@ ROOT           = os.path.join(os.path.dirname(__file__), "..")
 CIRCUITS_DIR   = os.path.join(ROOT, "circuits")
 MODEL_DIR      = os.path.join(ROOT, "model")
 STATE_PATH     = os.path.join(MODEL_DIR, "training_state.json")
-MODEL_PATH     = os.path.join(MODEL_DIR, "model.npy")   # flat neural-net weights
-REPLAY_DIR     = os.path.join(MODEL_DIR, "replays")
-BEST_LAPS_PATH = os.path.join(MODEL_DIR, "best_laps.json")
+MODEL_PATH     = os.path.join(MODEL_DIR, "model.npy")   # flache Netz-Gewichte (DQN)
 
 # ── Observation / action space ────────────────────────────────────────────────
 # obs: [0]x  [1]y  [2]hdg_diff/π  [3]speed  [4]progress
 #      [5]dist_left  [6]dist_right
 #      [7]ray-75°  [8]ray-45°  [9]ray-20°  [10]ray0°
 #      [11]ray+20°  [12]ray+45°  [13]ray+75°
-N_OBS     = 14   # must match env.observation_space
-N_ACTIONS = 20   # must match len(DISCRETE_ACTIONS) in env.py
+N_OBS     = 14   # muss zur Länge des Beobachtungsvektors in environment._get_obs passen
+N_ACTIONS = 20   # muss len(DISCRETE_ACTIONS) in environment.py entsprechen
 
 # ── Neural network architecture ───────────────────────────────────────────────
 NET_HIDDEN = (128, 128)   # hidden layer widths; change to (256, 256) for harder circuits
@@ -26,10 +24,10 @@ NET_HIDDEN = (128, 128)   # hidden layer widths; change to (256, 256) for harder
 # stays compatible. Only active during a worker's gradient phase — inference,
 # display and eval run with dropout OFF (net.eval()). Note: dropout in value-based
 # RL (DQN) is unusual and can destabilise learning; try a small value (~0.1).
-NET_DROPOUT = 0.0005
+NET_DROPOUT = 0.0
 
 # ── DQN (per-worker gradient training) ───────────────────────────────────────
-LR                 = 3e-2   # Adam learning rate
+LR                 = 3e-4   # Adam learning rate
 GAMMA              = 0.97   # discount factor
 REPLAY_CAPACITY    = 12_000 # transitions kept per worker (pre-allocated numpy)
 BATCH_SIZE         = 64     # mini-batch size on CPU
@@ -44,7 +42,7 @@ EPSILON_MIN   = 0.05
 EXPLORE_FRAC  = 0.3    # fraction of gens to anneal ε over
 
 # ── Genetic algorithm ─────────────────────────────────────────────────────────
-N_POP           = 80
+N_POP           = 40
 # Q-table backend population: tabular agents carry a sparse dict per individual
 # (more RAM than a flat weight vector), so a smaller population keeps the parallel
 # evaluation light while still giving the GA something to select/cross/mutate.
@@ -63,7 +61,6 @@ STAGNATION_GENS = 15
 MUTATION_RATE   = 0.02    # fraction of weights perturbed per offspring
 MUTATION_NOISE  = 0.10    # std of Gaussian noise added during mutation
 SAVE_EVERY      = 5
-MAX_REPLAYS     = 10
 
 # ── Reward shaping ─────────────────────────────────────────────────────────────
 LAP_BONUS       = 5_000.0  # reward for completing a full lap

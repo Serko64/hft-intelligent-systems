@@ -1,19 +1,19 @@
-"""FastAPI app: REST endpoints + a WebSocket that streams the live simulation.
+"""FastAPI-App: REST-Endpunkte + ein WebSocket, der die Live-Simulation streamt.
 
-Endpoints
+Endpunkte
 ---------
 GET  /api/circuits        -> {"circuits": [name, ...]}
-GET  /api/track?name=...  -> track geometry (centerline + walls), metres
-WS   /ws                  -> bidirectional:
-       client -> server commands:
+GET  /api/track?name=...  -> Streckengeometrie (Centerline + Wände), Meter
+WS   /ws                  -> bidirektional:
+       Client -> Server (Befehle):
          {"type": "start_training", "circuit", "steps_per_gen", "total_gens",
           "evolution_mode", "resume"}
-         {"type": "load_and_drive", "circuit"}
+         {"type": "load_and_drive", "circuit", "backend"}
          {"type": "stop"}
-       server -> client messages:
+       Server -> Client (Nachrichten):
          {"type": "track", ...geometry}
          {"type": "frame", "cars": [...]}     (~60 fps)
-         {"type": "stats", ...}               (per generation)
+         {"type": "stats", ...}               (pro Generation)
          {"type": "status", "state", "message"?}
 """
 from __future__ import annotations
@@ -27,10 +27,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from f1_rl.config import CIRCUITS
 from f1_rl.server.protocol import (
     car_to_dict, racing_line_to_dict, stats_to_dict, track_to_dict,
-)  # inspect dicts are built in the session/trainer and pumped through as-is
-from f1_rl.server.session import Session, _find_circuit
+)  # inspect-Dicts werden in Session/Trainer gebaut und unverändert durchgereicht
+from f1_rl.server import session
+from f1_rl.server.session import SESSION, find_circuit
+from f1_rl.utils.queues import get_latest
 
-session = Session()
 clients: set[WebSocket] = set()
 
 
@@ -48,62 +49,37 @@ async def _broadcast(obj: dict) -> None:
 
 
 async def _pump() -> None:
-    """Drain the session queues ~60×/s and push the newest frame/stats to clients."""
-    last_mode = session.mode
+    """Leert die Session-Queues ~60×/s und schiebt das Neueste an die Clients."""
+    last_mode = SESSION["mode"]
     while True:
         await asyncio.sleep(1.0 / 60.0)
         if not clients:
-            last_mode = session.mode
+            last_mode = SESSION["mode"]
             continue
-        # Reflect mode changes the client didn't trigger (e.g. training finished).
-        if session.mode != last_mode:
-            last_mode = session.mode
-            await _broadcast({"type": "status", "state": session.mode})
-        if session.render_q is not None:
-            frame = None
-            try:
-                while True:
-                    frame = session.render_q.get_nowait()
-            except Exception:        # noqa: BLE001
-                pass
-            if frame is not None:
-                await _broadcast({"type": "frame", "cars": [car_to_dict(c) for c in frame]})
-        if session.stats_q is not None:
-            stats = None
-            try:
-                while True:
-                    stats = session.stats_q.get_nowait()
-            except Exception:        # noqa: BLE001
-                pass
-            if stats is not None:
-                await _broadcast({"type": "stats", **stats_to_dict(stats)})
-        if session.line_q is not None:
-            line = None
-            try:
-                while True:
-                    line = session.line_q.get_nowait()
-            except Exception:        # noqa: BLE001
-                pass
-            if line is not None:
-                await _broadcast({"type": "racing_line", **racing_line_to_dict(line)})
-        if session.inspect_q is not None:
-            insp = None
-            try:
-                while True:
-                    insp = session.inspect_q.get_nowait()
-            except Exception:        # noqa: BLE001
-                pass
-            if insp is not None:
-                await _broadcast({"type": "inspect", **insp})
-        if session.table_q is not None:
-            tbl = None
-            try:
-                while True:
-                    tbl = session.table_q.get_nowait()
-            except Exception:        # noqa: BLE001
-                pass
-            if tbl is not None:
-                await _broadcast({"type": "qtable", **tbl})
+        # Vom Client nicht ausgelöste Moduswechsel spiegeln (z. B. Training fertig).
+        if SESSION["mode"] != last_mode:
+            last_mode = SESSION["mode"]
+            await _broadcast({"type": "status", "state": SESSION["mode"]})
+
+        frame = get_latest(SESSION["render_q"])
+        if frame is not None:
+            await _broadcast({"type": "frame", "cars": [car_to_dict(c) for c in frame]})
+
+        stats = get_latest(SESSION["stats_q"])
+        if stats is not None:
+            await _broadcast({"type": "stats", **stats_to_dict(stats)})
+
+        racing_line = get_latest(SESSION["line_q"])
+        if racing_line is not None:
+            await _broadcast({"type": "racing_line", **racing_line_to_dict(racing_line)})
+
+        inspect_data = get_latest(SESSION["inspect_q"])
+        if inspect_data is not None:
+            await _broadcast({"type": "inspect", **inspect_data})
+
+        table_data = get_latest(SESSION["table_q"])
+        if table_data is not None:
+            await _broadcast({"type": "qtable", **table_data})
 
 
 @asynccontextmanager
@@ -129,9 +105,9 @@ def list_circuits() -> dict:
 
 @app.get("/api/track")
 def get_track(name: str) -> dict:
-    fallback, hw = _find_circuit(name)
+    fallback, half_width = find_circuit(name)
     from f1_rl.simulation.track_loader import load_track
-    track = load_track(name, geojson_fallback_path=fallback, half_width_m=hw)
+    track = load_track(name, geojson_fallback_path=fallback, half_width_m=half_width)
     return track_to_dict(track)
 
 
@@ -149,12 +125,13 @@ async def _handle(cmd: dict, ws: WebSocket) -> None:
             use_rays=bool(cmd.get("use_rays", True)),
             auto_speed=bool(cmd.get("auto_speed", False)),
         )
-        await _broadcast({"type": "track", **track_to_dict(session.track)})
+        await _broadcast({"type": "track", **track_to_dict(SESSION["track"])})
         await _broadcast({"type": "status", "state": "training"})
     elif kind == "load_and_drive":
         try:
-            session.start_driving(cmd["circuit"], use_rays=bool(cmd.get("use_rays", True)))
-            await _broadcast({"type": "track", **track_to_dict(session.track)})
+            session.start_driving(cmd["circuit"], use_rays=bool(cmd.get("use_rays", True)),
+                                  backend=cmd.get("backend", "dqn"))
+            await _broadcast({"type": "track", **track_to_dict(SESSION["track"])})
             await _broadcast({"type": "status", "state": "driving"})
         except Exception as e:       # noqa: BLE001
             await ws.send_json({"type": "status", "state": "idle", "message": str(e)})
@@ -163,7 +140,7 @@ async def _handle(cmd: dict, ws: WebSocket) -> None:
     elif kind == "inspect_car":
         session.set_inspect(cmd.get("index"))
     elif kind == "stop":
-        session.stop()
+        session.stop_session()
         await _broadcast({"type": "status", "state": "idle"})
 
 
@@ -172,10 +149,10 @@ async def websocket_endpoint(ws: WebSocket) -> None:
     await ws.accept()
     clients.add(ws)
     try:
-        # Bring a freshly-connected client up to speed.
-        await ws.send_json({"type": "status", "state": session.mode})
-        if session.track is not None:
-            await ws.send_json({"type": "track", **track_to_dict(session.track)})
+        # Frisch verbundenen Client auf den aktuellen Stand bringen.
+        await ws.send_json({"type": "status", "state": SESSION["mode"]})
+        if SESSION["track"] is not None:
+            await ws.send_json({"type": "track", **track_to_dict(SESSION["track"])})
         while True:
             cmd = await ws.receive_json()
             await _handle(cmd, ws)
