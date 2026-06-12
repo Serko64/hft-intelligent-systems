@@ -96,7 +96,6 @@ class CarFrame(TypedDict):
     progress: float          # Meter entlang der Centerline
     lap: int                 # abgeschlossene Runden
     rays: tuple              # Lidar-Abstandswerte, 0..1
-    pack: int                # Rudel-/Pack-ID (für die Färbung), 0 im Classic-Modus
     score: float             # laufender kumulativer Episoden-Reward
     reward_parts: tuple      # Reward-Aufschlüsselung (Reihenfolge = REWARD_PARTS)
     generation: int          # aus welcher Evolutions-Generation die Policy stammt
@@ -520,7 +519,7 @@ def _get_obs(env: CarEnv) -> np.ndarray:
     )
 
 
-def make_car_frame(env: CarEnv, *, pack: int = 0, generation: int = 0) -> CarFrame:
+def make_car_frame(env: CarEnv, *, generation: int = 0) -> CarFrame:
     """Baut aus dem Auto-Zustand das Frame-Dict, das ans Web-UI gestreamt wird."""
     return {
         "x": env["x_m"],
@@ -532,7 +531,6 @@ def make_car_frame(env: CarEnv, *, pack: int = 0, generation: int = 0) -> CarFra
         "progress": env["progress"],
         "lap": env["lap_count"],
         "rays": tuple(cast_rays(env)),
-        "pack": pack,
         "score": env["episode_reward"],
         "reward_parts": tuple(env["reward_parts"][part] for part in REWARD_PARTS),
         "generation": generation,

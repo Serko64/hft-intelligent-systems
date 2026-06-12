@@ -15,7 +15,7 @@ from f1_rl.config import (
     ACCENT, BG, CANVAS_H, CANVAS_W, CIRCUITS, DIM, GENS_PRESETS, GOLD, GREEN,
     HOV_BG, MODEL_PATH, SEL_BG, STEPS_PRESETS, TEXT,
 )
-from old_ui.ui.widgets import draw_button, draw_checkbox
+from old_ui.ui.widgets import draw_button
 
 
 # ── Track preview (menu) ──────────────────────────────────────────────────────
@@ -156,7 +156,7 @@ def draw_menu(screen, fonts, sel_idx: int, hover_idx: int,
               steps_preset_idx: int, steps_value: int, typing_steps: str | None,
               gens_preset_idx: int, gens_value: int, typing_gens: str | None,
               active_param: str, scroll_offset: int = 0,
-              preview=None, evolution_mode: str = "classic",
+              preview=None,
               mouse_pos: tuple = (-1, -1)) -> None:
     screen.fill(BG)
     f_title, f_lg, f_md, f_sm = fonts
@@ -196,26 +196,14 @@ def draw_menu(screen, fonts, sel_idx: int, hover_idx: int,
     # ── Track preview ─────────────────────────────────────────────────────
     draw_track_preview(screen, fonts, preview, MENU_PREVIEW)
 
-    # ── Parameter + mode rows ─────────────────────────────────────────────
-    steps_rect, gens_rect, mode_rect = menu_param_rects()
+    # ── Parameter rows ────────────────────────────────────────────────────
+    steps_rect, gens_rect, _mode_rect = menu_param_rects()
     draw_param_row(screen, fonts, steps_rect, "Steps/gen:", steps_value,
                    steps_preset_idx, len(STEPS_PRESETS), typing_steps,
                    active_param == "steps")
     draw_param_row(screen, fonts, gens_rect, "Generations:", gens_value,
                    gens_preset_idx, len(GENS_PRESETS), typing_gens,
                    active_param == "gens")
-
-    # Mode row — a clickable checkbox (M still toggles it too)
-    is_pack  = evolution_mode == "pack"
-    hov_mode = mode_rect.collidepoint(mx, my)
-    pygame.draw.rect(screen, HOV_BG, mode_rect, border_radius=6)
-    pygame.draw.rect(screen, GREEN if is_pack else (GOLD if hov_mode else DIM),
-                     mode_rect, 2 if (is_pack or hov_mode) else 1, border_radius=6)
-    draw_checkbox(
-        screen, f_md,
-        pygame.Rect(mode_rect.x + 12, mode_rect.y, mode_rect.width - 24, mode_rect.height),
-        "Rudel-Evolution (Pack-Modus)", is_pack, hovered=hov_mode,
-    )
 
     # ── Action buttons (clickable; keyboard shortcuts still work) ─────────
     model_exists = os.path.exists(MODEL_PATH)

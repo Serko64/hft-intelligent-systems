@@ -1,13 +1,9 @@
 import * as THREE from "three"
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js"
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js"
 import type { Car, PolyRings, TrackMsg, Vec2 } from "@/lib/types"
 
 // ── Tweakables ────────────────────────────────────────────────────────────────
 const CAR_LENGTH_M = 5 // real F1 length; matches the training bbox (env CAR_LENGTH_M)
-export const MODEL_YAW_OFFSET = Math.PI/2 // rotate the car model if it faces the wrong way (e.g. Math.PI/2)
-const MODEL_PITCH = Math.PI /2 // lay a typical Y-up GLB flat onto the ground (z-up world)
-const MODEL_URL = "/models/f1.glb"
 
 // Sensor-Strahlen des angeklickten Autos (spiegelt environment.py: RAY_ANGLES / MAX_RAY_M).
 const RAY_ANGLES_RAD = [-75, -45, -20, 0, 20, 45, 75].map((d) => (d * Math.PI) / 180)
@@ -43,18 +39,11 @@ function genColorHex(gen: number): number {
 
 export type ColorMode = "rank" | "generation"
 
-interface ColorMat {
-  color: THREE.Color
-}
-
 interface CarObj {
   group: THREE.Group
-  bodyMaterials: ColorMat[] // materials tinted per-frame by rank
-  hasModel: boolean
+  bodyMaterial: THREE.MeshStandardMaterial // tinted per-frame by rank
   lastHex: number // zuletzt gesetzte Farbe — vermeidet überflüssige setHex-Aufrufe pro Frame
 }
-
-export type CarStyle = "model" | "box" // "box" = cheap primitive for performance
 
 /**
  * Renders the circuit and the live cars in a freely-movable 3D view
@@ -71,7 +60,6 @@ export class TrackScene {
   private racingLine: THREE.Mesh | null = null
   private carPool: CarObj[] = []
   private carScale = 1 // cars are scaled up on big circuits so they stay visible
-  private carStyle: CarStyle = "model" // "box" skips the GLB for performance
   private colorMode: ColorMode = "rank"
   private selectedIndex: number | null = null
   private onCarSelect: ((i: number | null) => void) | null = null
@@ -79,7 +67,6 @@ export class TrackScene {
   private raysObj: THREE.LineSegments // Sensor-Strahlen des selektierten Autos
   private raycaster = new THREE.Raycaster()
   private pointerDown: { x: number; y: number } | null = null
-  private modelTemplate: THREE.Object3D | null = null
   private raf = 0
   private resizeObs: ResizeObserver
   private canvas: HTMLCanvasElement
@@ -153,18 +140,6 @@ export class TrackScene {
     this.resizeObs = new ResizeObserver(() => this.resize())
     this.resizeObs.observe(canvas)
     this.resize()
-
-    new GLTFLoader().load(
-      MODEL_URL,
-      (gltf) => {
-        this.modelTemplate = this.normalizeModel(gltf.scene)
-      },
-      undefined,
-      () => {
-        // No model file yet — the cone fallback is used. This is expected.
-        console.info("[scene] No car model at", MODEL_URL, "— using placeholder.")
-      },
-    )
 
     this.loop = this.loop.bind(this)
     this.raf = requestAnimationFrame(this.loop)
@@ -481,14 +456,13 @@ export class TrackScene {
       const c = cars[i]
       obj.group.visible = true
       obj.group.position.set(c.x, c.y, 0)
-      obj.group.rotation.z = c.heading + (obj.hasModel ? MODEL_YAW_OFFSET : 0)
+      obj.group.rotation.z = c.heading
       const hex = this.colorMode === "generation"
         ? genColorHex(c.generation)
         : rankColorHex(i, cars.length)
-      // Nur umfärben, wenn sich die Farbe wirklich geändert hat (spart ~40 Autos
-      // × N Materialien setHex pro Frame).
+      // Nur umfärben, wenn sich die Farbe wirklich geändert hat.
       if (hex !== obj.lastHex) {
-        for (const m of obj.bodyMaterials) m.color.setHex(hex)
+        obj.bodyMaterial.color.setHex(hex)
         obj.lastHex = hex
       }
     }
@@ -540,26 +514,6 @@ export class TrackScene {
     this.raysObj.visible = true
   }
 
-  /** Switch car bodies between the full GLB model and a cheap box (performance).
-   *  Rebuilds the existing pool so the change is visible immediately. */
-  setCarStyle(style: CarStyle) {
-    if (style === this.carStyle) return
-    this.carStyle = style
-    for (const obj of this.carPool) {
-      this.scene.remove(obj.group)
-      obj.group.traverse((o) => {
-        const mesh = o as THREE.Mesh
-        if ((mesh as unknown as { isMesh?: boolean }).isMesh) {
-          mesh.geometry?.dispose()
-          const m = mesh.material
-          if (Array.isArray(m)) m.forEach((mm) => mm.dispose())
-          else m?.dispose()
-        }
-      })
-    }
-    this.carPool = []
-  }
-
   setColorMode(mode: ColorMode) {
     this.colorMode = mode
   }
@@ -606,109 +560,20 @@ export class TrackScene {
 
   private syncPool(n: number) {
     while (this.carPool.length < n) this.carPool.push(this.makeCar())
-    // If the model finished loading after cars were created, upgrade the bodies.
-    if (this.carStyle === "model" && this.modelTemplate) {
-      for (const obj of this.carPool) {
-        if (!obj.hasModel) this.upgradeToModel(obj)
-      }
-    }
   }
 
   private makeCar(): CarObj {
-    const group = new THREE.Group()
-    const obj: CarObj = { group, bodyMaterials: [], hasModel: false, lastHex: -1 }
-    if (this.carStyle === "box") {
-      const box = this.makeBoxBody()
-      group.add(box)
-      obj.bodyMaterials = [box.material as unknown as ColorMat]
-    } else if (this.modelTemplate) {
-      this.upgradeToModel(obj)
-    } else {
-      const cone = this.makeFallbackBody()
-      group.add(cone)
-      obj.bodyMaterials = [cone.material as unknown as ColorMat]
-    }
-    group.scale.setScalar(this.carScale)
-    this.scene.add(group)
-    return obj
-  }
-
-  private makeBoxBody(): THREE.Mesh {
     // A flat box roughly the size of an F1 car, length along +X (heading 0).
-    const box = new THREE.Mesh(
-      new THREE.BoxGeometry(CAR_LENGTH_M, 2, 1),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.1, roughness: 0.6 }),
-    )
+    const material = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.1, roughness: 0.6 })
+    const box = new THREE.Mesh(new THREE.BoxGeometry(CAR_LENGTH_M, 2, 1), material)
     box.position.z = 0.5
     box.name = "body"
-    return box
-  }
 
-  private makeFallbackBody(): THREE.Mesh {
-    // A cone pointing +X (heading 0); its material is tinted by rank.
-    const cone = new THREE.Mesh(
-      new THREE.ConeGeometry(2, CAR_LENGTH_M, 16),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.1, roughness: 0.6 }),
-    )
-    cone.rotation.z = -Math.PI / 2
-    cone.position.z = 0.6
-    cone.name = "body"
-    return cone
-  }
-
-  private upgradeToModel(obj: CarObj) {
-    if (!this.modelTemplate) return
-    const old = obj.group.getObjectByName("body")
-    if (old) obj.group.remove(old)
-
-    const body = this.modelTemplate.clone(true)
-    body.name = "body"
-
-    // Clone materials per car so each can be tinted to its own rank colour.
-    const mats: ColorMat[] = []
-    body.traverse((o) => {
-      const mesh = o as THREE.Mesh
-      if (!(mesh as unknown as { isMesh?: boolean }).isMesh) return
-      if (Array.isArray(mesh.material)) {
-        mesh.material = mesh.material.map((m) => m.clone())
-        for (const m of mesh.material) if ("color" in m) mats.push(m as unknown as ColorMat)
-      } else if (mesh.material) {
-        mesh.material = mesh.material.clone()
-        if ("color" in mesh.material) mats.push(mesh.material as unknown as ColorMat)
-      }
-    })
-
-    obj.group.add(body)
-    obj.bodyMaterials = mats
-    obj.lastHex = -1 // neue Materialien → Farb-Cache zurücksetzen
-    obj.hasModel = true
-  }
-
-  /** Center a loaded model, scale it to ~CAR_LENGTH_M, lay it flat, and set it
-   *  down so its lowest point rests on the ground (z = 0) instead of half-buried. */
-  private normalizeModel(src: THREE.Object3D): THREE.Object3D {
-    const wrapper = new THREE.Group()
-    wrapper.add(src)
-
-    // Center the model on its own origin.
-    const box = new THREE.Box3().setFromObject(src)
-    const size = new THREE.Vector3()
-    const center = new THREE.Vector3()
-    box.getSize(size)
-    box.getCenter(center)
-    src.position.sub(center)
-
-    // Scale to a consistent length and lay flat (z-up world).
-    const maxDim = Math.max(size.x, size.y, size.z) || 1
-    wrapper.scale.setScalar(CAR_LENGTH_M / maxDim)
-    wrapper.rotation.x = MODEL_PITCH
-
-    // Lift so the bottom of the (rotated, scaled) model sits exactly on z = 0.
-    wrapper.updateMatrixWorld(true)
-    const lifted = new THREE.Box3().setFromObject(wrapper)
-    wrapper.position.z = -lifted.min.z
-
-    return wrapper
+    const group = new THREE.Group()
+    group.add(box)
+    group.scale.setScalar(this.carScale)
+    this.scene.add(group)
+    return { group, bodyMaterial: material, lastHex: -1 }
   }
 
   // ── Camera / resize ─────────────────────────────────────────────────────────

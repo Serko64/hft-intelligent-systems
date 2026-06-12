@@ -6,8 +6,8 @@ Pro Generation:
      (siehe worker.run_worker).
   2. Nach Fitness sortieren, eine Hall of Fame der Eliten pflegen, die Racing-Line
      bei neuem Bestwert aufzeichnen.
-  3. Die nächste Generation mit den genetischen Operatoren züchten (klassische
-     Rang-Selektion oder Pack-/Gruppen-Selektion).
+  3. Die nächste Generation mit den genetischen Operatoren züchten
+     (Rang-Selektion, Crossover, Mutation).
 
 Dieses Modul übernimmt auch die Persistenz (Checkpoints, Trainingsstand). Die
 Live-Anzeige der Population liegt in display.py, die Racing-Line in replay.py und
@@ -25,9 +25,9 @@ from queue import Full, Queue
 import numpy as np
 
 from f1_rl.config import (
-    EPSILON_MIN, MIGRATION_RATE, MODEL_DIR, MODEL_PATH,
+    EPSILON_MIN, MODEL_DIR, MODEL_PATH,
     MUTATION_NOISE, MUTATION_RATE,
-    N_ACTIONS, N_BEST_CLONES, N_PACKS, N_POP, PACK_MIN_SURVIVORS, PACK_SUPPORT,
+    N_ACTIONS, N_BEST_CLONES, N_POP,
     SAVE_EVERY,
     STATE_PATH, STEPS_PER_GEN, STAGNATION_GENS,
 )
@@ -35,9 +35,7 @@ from f1_rl.learning.evolution import (
     epsilon_for_generation, eval_step_budget, update_auto_speed,
     update_hall_of_fame, update_stagnation,
 )
-from f1_rl.learning.genetics import (
-    assign_packs, breed_packs, crossover, mutate, rank_select,
-)
+from f1_rl.learning.genetics import crossover, mutate, rank_select
 from f1_rl.learning.replay import emit_racing_line
 
 
@@ -141,56 +139,45 @@ def _copy_weight_vector(weights: np.ndarray) -> np.ndarray:
     return weights.copy()
 
 
-def _breed_next_generation(evolution_mode, weights_out, fitnesses, pack_ids,
+def _breed_next_generation(weights_out,
                           hall_of_fame, best_ever_w, stagnation_count,
                           stagnation_boost) -> list:
     """Erzeugt die nächste Generation aus den Ergebnissen dieser Generation.
 
-    "classic": HOF-Eliten überleben unverändert, leicht mutierte Klone des
-    Allzeit-Besten ergänzen sie, der Rest sind Crossover-Kinder mit von ~0
-    (elite-nah) bis voll (Schwanz) ansteigender Mutation. "pack" delegiert an
-    genetics.breed_packs (Gruppen-Selektion). Bei starker Stagnation wird ein
-    Slot durch ein frisches Zufalls-Individuum ersetzt.
+    HOF-Eliten überleben unverändert, leicht mutierte Klone des Allzeit-Besten
+    ergänzen sie, der Rest sind Crossover-Kinder mit von ~0 (elite-nah) bis voll
+    (Schwanz) ansteigender Mutation. Bei starker Stagnation wird ein Slot durch
+    ein frisches Zufalls-Individuum ersetzt.
     """
     from f1_rl.learning.network import random_weights
 
     hof_weights = [w for _, w in hall_of_fame]
 
-    if evolution_mode == "pack":
-        new_pop = breed_packs(
-            weights_out, fitnesses, pack_ids, hof_weights, best_ever_w, N_POP,
-            pack_support  = PACK_SUPPORT,
-            migration_rate= MIGRATION_RATE,
-            min_survivors = PACK_MIN_SURVIVORS,
-            mutation_rate = MUTATION_RATE  * stagnation_boost,
-            mutation_noise= MUTATION_NOISE * stagnation_boost,
+    # Stufe 1: HOF-Eliten überleben unverändert
+    new_pop = [w.copy() for _, w in hall_of_fame]
+
+    # Stufe 2: leicht mutierte Kopien des Allzeit-Besten
+    for _ in range(N_BEST_CLONES):
+        if len(new_pop) < N_POP:
+            new_pop.append(mutate(best_ever_w,
+                                  MUTATION_RATE * 0.3,
+                                  MUTATION_NOISE * 0.3))
+
+    # Stufe 3: Crossover-Kinder mit rang-abgestufter Mutation
+    n_protected = len(new_pop)
+    while len(new_pop) < N_POP:
+        pa = (rank_select(hof_weights)
+              if (hof_weights and np.random.random() < 0.5)
+              else rank_select(weights_out))
+        pb = rank_select(weights_out)
+        child = crossover(pa, pb)
+        rank_factor = (len(new_pop) - n_protected) / max(N_POP - n_protected, 1)
+        child = mutate(
+            child,
+            rate  = MUTATION_RATE  * stagnation_boost * (0.3 + rank_factor * 0.7),
+            noise = MUTATION_NOISE * stagnation_boost * (0.3 + rank_factor * 0.7),
         )
-    else:
-        # Stufe 1: HOF-Eliten überleben unverändert
-        new_pop = [w.copy() for _, w in hall_of_fame]
-
-        # Stufe 2: leicht mutierte Kopien des Allzeit-Besten
-        for _ in range(N_BEST_CLONES):
-            if len(new_pop) < N_POP:
-                new_pop.append(mutate(best_ever_w,
-                                      MUTATION_RATE * 0.3,
-                                      MUTATION_NOISE * 0.3))
-
-        # Stufe 3: Crossover-Kinder mit rang-abgestufter Mutation
-        n_protected = len(new_pop)
-        while len(new_pop) < N_POP:
-            pa = (rank_select(hof_weights)
-                  if (hof_weights and np.random.random() < 0.5)
-                  else rank_select(weights_out))
-            pb = rank_select(weights_out)
-            child = crossover(pa, pb)
-            rank_factor = (len(new_pop) - n_protected) / max(N_POP - n_protected, 1)
-            child = mutate(
-                child,
-                rate  = MUTATION_RATE  * stagnation_boost * (0.3 + rank_factor * 0.7),
-                noise = MUTATION_NOISE * stagnation_boost * (0.3 + rank_factor * 0.7),
-            )
-            new_pop.append(child)
+        new_pop.append(child)
 
     # Bei starker Stagnation ein frisches Zufalls-Individuum injizieren
     if stagnation_count > 0 and stagnation_count % STAGNATION_GENS == 0:
@@ -217,15 +204,12 @@ def train(
     resume: bool = False,
     steps_per_gen: int = STEPS_PER_GEN,
     total_gens: int | None = None,
-    evolution_mode: str = "classic",
     use_rays: bool = True,
     cancel_event=None,
     table_queue: Queue | None = None,  # accepted & ignored (q-table backend only)
 ) -> tuple[object, object]:
     """Genetisches DQN: N_POP parallele DDQN-Worker, pro Generation vom GA evolviert.
 
-    evolution_mode: "classic" = individuelle Rang-Selektion;
-                    "pack"    = Pack-/Gruppen-Selektion (schwache DNA überlebt über ihr Pack).
     cancel_event: optionales threading.Event — gesetzt, stoppt das Training sauber
                   an der nächsten Generationsgrenze (die laufende Generation endet zuerst).
     """
@@ -262,10 +246,8 @@ def train(
     prev_best_eval    = -1e9
 
     pop_holder  = [list(population)]        # Display-Thread liest pop_holder[0]
-    pack_holder = [[0] * len(population)]    # parallele Pack-IDs für die Schwarm-Färbung
     gen_holder  = [start_gen]                # aktuelle Generation, für die Auto-Färbung
     stop_event  = threading.Event()
-    print(f"[train] Evolution mode: {evolution_mode}")
 
     if render_queue is not None:
         from f1_rl.learning.agent import act, forward_trace
@@ -277,7 +259,6 @@ def train(
                 build_policy=neuronal_net_from_weights,   # Gewichtsvektor → fertiges Netz
                 choose_action=act,
                 inspect_trace_fn=forward_trace,
-                pack_holder=pack_holder,
                 use_rays=use_rays,
                 speed_holder=speed_holder,
                 gen_holder=gen_holder,
@@ -324,20 +305,9 @@ def train(
                     best_ever_weight_vector, track,
                     max_steps=eval_steps, use_rays=use_rays))
 
-            # 3. Pack-Zuordnung (Schwarm-Modus): Autos nach Endposition + Score
-            #    clustern, ähnlich fahrende bilden ein „Pack".
-            pack_ids = [0] * N_POP
-            if evolution_mode == "pack":
-                descriptors = np.array(
-                    [[gx, gy, fit] for (gx, gy), fit in zip(ghost_positions, fitnesses)],
-                    dtype=np.float64,
-                )
-                pack_ids = assign_packs(descriptors, N_PACKS).tolist()
-
-            # Sortierte Population + Pack-Farben + Generation an die Anzeige geben.
+            # 3. Sortierte Population + Generation an die Anzeige geben.
             gen_holder[0]  = gen
             pop_holder[0]  = list(weights_out)
-            pack_holder[0] = list(pack_ids)
 
             # 4. Stagnation: je länger der Bestwert feststeckt, desto stärker wird
             #    die Mutation hochgeregelt (stagnation_boost), um das Plateau zu verlassen.
@@ -346,7 +316,7 @@ def train(
 
             # 5. Nächste Generation aus den Ergebnissen dieser züchten.
             population = _breed_next_generation(
-                evolution_mode, weights_out, fitnesses, pack_ids,
+                weights_out,
                 hall_of_fame, best_ever_weight_vector, stagnation_count, stagnation_boost)
 
             # 6. Stats melden + Checkpoint ─────────────────────────────────
@@ -361,7 +331,6 @@ def train(
                         "best_fitness":    fitnesses[0],
                         "mean_fitness":    float(np.mean(fitnesses)),
                         "ghost_positions": ghost_positions,
-                        "n_packs":         len(set(pack_ids)) if evolution_mode == "pack" else 0,
                     })
                 except Full:
                     pass

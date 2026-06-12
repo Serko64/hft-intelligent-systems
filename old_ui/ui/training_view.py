@@ -18,7 +18,7 @@ from old_ui.ui.camera import (
     _get_track_surface, _get_zoomed_track_surface, _world_to_screen,
 )
 from old_ui.ui.hud import draw_throttle_graph
-from old_ui.ui.theme import draw_star, pack_color, rank_color_size
+from old_ui.ui.theme import draw_star, rank_color_size
 from old_ui.ui.widgets import draw_button, draw_checkbox
 
 # Human-readable labels for each reward component (order matches env.REWARD_PARTS)
@@ -119,7 +119,6 @@ def draw_training(screen, fonts, track, car_states: list | None, stats: dict,
                   hover_score_idx: int = -1,
                   best_marker_px: tuple[float, float] | None = None,
                   show_rays: bool = False,
-                  swarm_mode: bool = False,
                   focus_idx: int = -1, show_scores: bool = False,
                   mouse_pos: tuple = (-1, -1)) -> None:
     """Render all population cars live.
@@ -199,11 +198,7 @@ def draw_training(screen, fonts, track, car_states: list | None, stats: dict,
                 if not (-20 <= ci_sx <= CANVAS_W + 20 and -20 <= ci_sy <= CANVAS_H + 20):
                     continue
                 frac = rank / max(n_cars - 1, 1)
-                if swarm_mode and len(ci) > 9:
-                    color = pack_color(ci[9])
-                    r = 9 if rank == 0 else 6
-                else:
-                    color, r = rank_color_size(frac)
+                color, r = rank_color_size(frac)
                 if rank == 0:
                     # Pulsing outer ring so the best car is always easy to spot
                     pygame.draw.circle(screen, GOLD, (ci_sx, ci_sy), pulse_r, 2)
@@ -270,19 +265,10 @@ def draw_training(screen, fonts, track, car_states: list | None, stats: dict,
 
     # Colour legend
     legend_y = y + 28
-    if swarm_mode:
-        n_packs = stats.get("n_packs", 0) if stats else 0
-        screen.blit(f_sm.render(f"PACKS  ({n_packs} Rudel)", True, GOLD), (14, legend_y))
-        legend_y += 18
-        for pid in range(max(n_packs, 1)):
-            pygame.draw.circle(screen, pack_color(pid), (22, legend_y + 6), 5)
-            screen.blit(f_sm.render(f"Rudel {pid + 1}", True, pack_color(pid)), (32, legend_y))
-            legend_y += 17
-    else:
-        for label, color in [("Best", GOLD), ("Top 20%", GREEN), ("Mid", (200, 130, 50)), ("Bottom", (110, 40, 40))]:
-            pygame.draw.circle(screen, color, (22, legend_y + 6), 5)
-            screen.blit(f_sm.render(label, True, color), (32, legend_y))
-            legend_y += 17
+    for label, color in [("Best", GOLD), ("Top 20%", GREEN), ("Mid", (200, 130, 50)), ("Bottom", (110, 40, 40))]:
+        pygame.draw.circle(screen, color, (22, legend_y + 6), 5)
+        screen.blit(f_sm.render(label, True, color), (32, legend_y))
+        legend_y += 17
 
     top_scores = stats.get("top_scores", []) if stats else []
     if top_scores:

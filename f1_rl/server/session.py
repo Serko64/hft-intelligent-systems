@@ -103,13 +103,13 @@ def start_training(circuit: str, steps_per_gen: int, total_gens: int,
     SESSION["line_q"] = queue.Queue(maxsize=2)
     SESSION["inspect_q"] = queue.Queue(maxsize=2)
     # Nur das Q-Table-Backend streamt eine volle Tabelle; der DQN-Trainer ignoriert sie.
-    is_qtable = evolution_mode.startswith("qtable")   # "qtable" oder "qtable_pack"
+    is_qtable = evolution_mode == "qtable"
     SESSION["table_q"] = queue.Queue(maxsize=2) if is_qtable else None
     SESSION["mode"] = "training"
     cancel_event = SESSION["stop_event"]
 
     def run() -> None:
-        # "qtable"/"qtable_pack" wählt das Backend ohne neuronales Netz (klassisches
+        # "qtable" wählt das Backend ohne neuronales Netz (klassisches
         # tabellarisches Q-Learning); alles andere nutzt den genetischen DQN-Trainer.
         # Beide haben dieselbe Signatur, der restliche Aufruf ist identisch.
         if is_qtable:
@@ -124,7 +124,7 @@ def start_training(circuit: str, steps_per_gen: int, total_gens: int,
                   inspect_queue=SESSION["inspect_q"],
                   auto_speed=auto_speed,
                   steps_per_gen=steps_per_gen, total_gens=total_gens,
-                  evolution_mode=evolution_mode, resume=resume,
+                  resume=resume,
                   use_rays=use_rays, cancel_event=cancel_event,
                   table_queue=SESSION["table_q"])
         except Exception as e:               # noqa: BLE001

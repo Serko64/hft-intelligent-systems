@@ -1,8 +1,8 @@
 {
-  "timesteps_done": 0,
-  "total_timesteps": 0,
+  "timesteps_done": 11000000,
+  "total_timesteps": 10000000000,
   "circuit": "Circuit de Monaco",
-  "epsilon": 0.05,
-  "generation": 199,
-  "best_fitness": 184995.68982127556
+  "epsilon": 0.1449999999999999,
+  "generation": 54,
+  "best_fitness": 46032.03331399687
 }

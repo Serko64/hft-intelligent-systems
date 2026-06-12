@@ -17,7 +17,7 @@ from collections import deque
 import pygame
 
 from f1_rl.config import (
-    CANVAS_H, CANVAS_W, CIRCUITS, EVOLUTION_MODE_DEFAULT,
+    CANVAS_H, CANVAS_W, CIRCUITS,
     FPS, GENS_PRESETS, MODEL_PATH, REPLAY_DIR, STEPS_PRESETS,
 )
 from f1_rl.learning.trainer import load_training_state
@@ -76,7 +76,7 @@ class _TrainingThread(threading.Thread):
     def __init__(self, query: str, fallback: str, half_width: float,
                  render_queue: queue.Queue, stats_queue: queue.Queue,
                  resume: bool = False, steps_per_gen: int = 5_000,
-                 total_gens: int = 200, evolution_mode: str = "classic"):
+                 total_gens: int = 200):
         super().__init__(daemon=True)
         self.query          = query
         self.fallback       = fallback
@@ -86,7 +86,6 @@ class _TrainingThread(threading.Thread):
         self.resume         = resume
         self.steps_per_gen  = steps_per_gen
         self.total_gens     = total_gens
-        self.evolution_mode = evolution_mode
         self.model          = None
         self.track          = None
         self.error: Exception | None = None
@@ -107,7 +106,6 @@ class _TrainingThread(threading.Thread):
                 resume=self.resume,
                 steps_per_gen=self.steps_per_gen,
                 total_gens=self.total_gens,
-                evolution_mode=self.evolution_mode,
             )
         except Exception as e:
             self.error = e
@@ -131,7 +129,6 @@ def main():
     zoom           = 1.0
     active_param   = "steps"
     scroll_offset  = 0
-    evolution_mode = EVOLUTION_MODE_DEFAULT
 
     steps_preset_idx = STEPS_PRESETS.index(5_000)
     steps_value      = 5_000
@@ -185,7 +182,6 @@ def main():
             resume=resume_flag,
             steps_per_gen=steps_value,
             total_gens=gens_value,
-            evolution_mode=evolution_mode,
         )
         training_thread.start()
         training_start = time.time()
@@ -264,8 +260,6 @@ def main():
                             sel_idx = (sel_idx + 1) % len(CIRCUITS)
                         if event.key == pygame.K_UP:
                             sel_idx = (sel_idx - 1) % len(CIRCUITS)
-                        if event.key == pygame.K_m:
-                            evolution_mode = "pack" if evolution_mode == "classic" else "classic"
                         if event.key == pygame.K_TAB:
                             active_param = "gens" if active_param == "steps" else "steps"
                         if event.key == pygame.K_LEFT:
@@ -293,7 +287,6 @@ def main():
                                 resume=resume,
                                 steps_per_gen=steps_value,
                                 total_gens=gens_value,
-                                evolution_mode=evolution_mode,
                             )
                             training_thread.start()
                             training_start = time.time()
@@ -521,7 +514,7 @@ def main():
                       steps_preset_idx, steps_value, typing_steps,
                       gens_preset_idx,  gens_value,  typing_gens,
                       active_param, scroll_offset=scroll_offset,
-                      preview=preview, evolution_mode=evolution_mode)
+                      preview=preview)
 
         elif state == "training":
             live_track     = training_thread.track if training_thread else None
@@ -533,7 +526,7 @@ def main():
                 stats=last_stats, elapsed=time.time() - training_start,
                 zoom=zoom, throttle_hist=training_throttle_hist, car_trail=car_trail,
                 hover_score_idx=hover_score_idx, best_marker_px=best_marker_px,
-                show_rays=show_rays, swarm_mode=(evolution_mode == "pack"),
+                show_rays=show_rays,
                 focus_idx=selected_car, show_scores=show_scores,
             )
 

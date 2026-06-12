@@ -34,7 +34,6 @@ export interface Car {
   progress: number
   lap: number
   rays: number[]
-  pack: number
   score: number
   reward_parts?: Record<string, number>
   generation: number
@@ -54,7 +53,6 @@ export interface StatsMsg {
   epsilon: number
   best_fitness: number
   mean_fitness: number
-  n_packs: number
 }
 
 export interface StatusMsg {
@@ -100,7 +98,7 @@ export type ClientMsg =
       circuit: string
       steps_per_gen: number
       total_gens: number
-      evolution_mode: "classic" | "pack" | "qtable" | "qtable_pack"
+      evolution_mode: "classic" | "qtable"
       resume: boolean
       use_rays: boolean
       auto_speed: boolean

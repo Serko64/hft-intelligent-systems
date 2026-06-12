@@ -34,7 +34,6 @@ def run_population_display(
     build_policy,
     choose_action,
     inspect_trace_fn,
-    pack_holder: list | None = None,    # nur DQN-Pack-Modus; None -> alle pack 0
     use_rays: bool = True,
     speed_holder: list | None = None,
     gen_holder: list | None = None,
@@ -88,7 +87,6 @@ def run_population_display(
                 next_policies[i] = build_policy(current_pop[i])
                 next_gen[i] = arriving_gen
 
-        packs = pack_holder[0] if pack_holder is not None else []
         arriving = int(gen_holder[0])
         frames: list = []
         for i in range(n_cars):
@@ -109,11 +107,7 @@ def run_population_display(
                 if terminated:
                     break
 
-            frames.append(make_car_frame(
-                envs[i],
-                pack=int(packs[i]) if i < len(packs) else 0,
-                generation=car_gens[i],
-            ))
+            frames.append(make_car_frame(envs[i], generation=car_gens[i]))
 
             if terminated:
                 observations[i] = reset_env(envs[i])

@@ -1,12 +1,11 @@
 import { memo, useEffect, useRef, type MutableRefObject } from "react"
 import type { Car, RacingLineMsg, TrackMsg } from "@/lib/types"
-import { TrackScene, type CarStyle, type ColorMode } from "@/three/TrackScene"
+import { TrackScene, type ColorMode } from "@/three/TrackScene"
 
 interface Props {
   track: TrackMsg | null
   carsRef: MutableRefObject<Car[]>
   racingLine: RacingLineMsg | null
-  carStyle: CarStyle
   colorMode: ColorMode
   selectedCar: number | null
   onSelectCar: (i: number | null) => void
@@ -14,7 +13,7 @@ interface Props {
 
 /** Hosts the three.js TrackScene and feeds it the live car data + track geometry. */
 function SceneCanvasImpl({
-  track, carsRef, racingLine, carStyle, colorMode, selectedCar, onSelectCar,
+  track, carsRef, racingLine, colorMode, selectedCar, onSelectCar,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sceneRef = useRef<TrackScene | null>(null)
@@ -47,11 +46,6 @@ function SceneCanvasImpl({
   useEffect(() => {
     if (track && sceneRef.current) sceneRef.current.setTrack(track)
   }, [track])
-
-  // Switch car bodies between full 3D model and a cheap box (performance).
-  useEffect(() => {
-    sceneRef.current?.setCarStyle(carStyle)
-  }, [carStyle])
 
   // Draw (or clear) the best-lap racing line.
   useEffect(() => {

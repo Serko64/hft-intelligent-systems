@@ -74,15 +74,6 @@ LAP_BONUS       = 5_000.0  # reward for completing a full lap
 LAPS_PER_EPISODE     = 2   # episode ends after this many laps (or a crash)
 CURRICULUM_AFTER_LAP = 1   # optimisation rewards activate after this many laps done
 
-# ── Pack / swarm evolution ─────────────────────────────────────────────────────
-# "Rudel-Evolution": instead of pure individual survival-of-the-fittest, the
-# population is clustered into packs and selection is partly group-level, so weak
-# DNA can survive by belonging to a strong pack (group / kin selection).
-EVOLUTION_MODE_DEFAULT = "classic"   # "classic" | "pack"
-N_PACKS            = 5     # number of packs (behavioural clusters) per generation
-PACK_SUPPORT       = 0.5   # how strongly weak members are pulled toward the pack best
-MIGRATION_RATE     = 0.10  # chance an offspring is a cross-pack crossover (gene flow)
-PACK_MIN_SURVIVORS = 1     # elites guaranteed to survive per pack (no abrupt extinction)
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 CANVAS_W, CANVAS_H = 1600, 1000

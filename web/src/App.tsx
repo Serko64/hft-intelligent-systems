@@ -9,14 +9,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { useSimBridge } from "@/lib/useSimBridge"
 import { api } from "@/lib/bridge"
 import type { TrackMsg } from "@/lib/types"
-import type { CarStyle, ColorMode } from "@/three/TrackScene"
+import type { ColorMode } from "@/three/TrackScene"
 
 export default function App() {
   const { connected, status, statusMessage, track, stats, statsHistory, racingLine, inspect, qtable, carsRef, send } =
     useSimBridge()
 
-  // Car rendering style: full 3D model, or a cheap box for performance.
-  const [carStyle, setCarStyle] = useState<CarStyle>("model")
   // Colour cars by rank (best→worst) or by their evolution generation.
   const [colorMode, setColorMode] = useState<ColorMode>("rank")
   const [showCharts, setShowCharts] = useState(true)
@@ -45,8 +43,6 @@ export default function App() {
         statusMessage={statusMessage}
         onSend={send}
         onCircuitChange={onCircuitChange}
-        boxMode={carStyle === "box"}
-        onBoxModeChange={(box) => setCarStyle(box ? "box" : "model")}
         colorByGen={colorMode === "generation"}
         onColorByGenChange={(g) => setColorMode(g ? "generation" : "rank")}
         showCharts={showCharts}
@@ -58,7 +54,6 @@ export default function App() {
           track={track ?? preview}
           carsRef={carsRef}
           racingLine={racingLine}
-          carStyle={carStyle}
           colorMode={colorMode}
           selectedCar={selectedCar}
           onSelectCar={setSelectedCar}

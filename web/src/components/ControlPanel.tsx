@@ -20,8 +20,6 @@ interface Props {
   statusMessage?: string
   onSend: (cmd: ClientMsg) => void
   onCircuitChange?: (name: string) => void
-  boxMode: boolean
-  onBoxModeChange: (box: boolean) => void
   colorByGen: boolean
   onColorByGenChange: (g: boolean) => void
   showCharts: boolean
@@ -29,14 +27,13 @@ interface Props {
 }
 
 export function ControlPanel({
-  connected, status, statusMessage, onSend, onCircuitChange, boxMode, onBoxModeChange,
+  connected, status, statusMessage, onSend, onCircuitChange,
   colorByGen, onColorByGenChange, showCharts, onShowChartsChange,
 }: Props) {
   const [circuits, setCircuits] = useState<string[]>([])
   const [circuit, setCircuit] = useState<string>("")
   const [stepsIdx, setStepsIdx] = useState(4) // 5000
   const [gensIdx, setGensIdx] = useState(5) // 200
-  const [pack, setPack] = useState(false)
   const [qtable, setQtable] = useState(false) // tabular Q-learning instead of the DQN
   const [useRays, setUseRays] = useState(true)
   const [speed, setSpeed] = useState(3) // live-view sub-steps per frame (matches SIM_SPEED_DEFAULT)
@@ -69,7 +66,7 @@ export function ControlPanel({
       circuit,
       steps_per_gen: steps,
       total_gens: gens,
-      evolution_mode: qtable ? (pack ? "qtable_pack" : "qtable") : pack ? "pack" : "classic",
+      evolution_mode: qtable ? "qtable" : "classic",
       resume,
       use_rays: useRays,
       auto_speed: autoSpeed,
@@ -163,14 +160,6 @@ export function ControlPanel({
           />
         </div>
 
-        {/* Performance: cheap box instead of the full 3D model */}
-        <div className="flex items-center gap-2">
-          <Checkbox id="boxmode" checked={boxMode} onCheckedChange={(v) => onBoxModeChange(Boolean(v))} />
-          <Label htmlFor="boxmode" className="cursor-pointer">
-            Schnellmodus (Box statt 3D-Modell)
-          </Label>
-        </div>
-
         {/* Colour cars by generation instead of rank */}
         <div className="flex items-center gap-2">
           <Checkbox id="colorgen" checked={colorByGen} onCheckedChange={(v) => onColorByGenChange(Boolean(v))} />
@@ -184,14 +173,6 @@ export function ControlPanel({
           <Checkbox id="charts" checked={showCharts} onCheckedChange={(v) => onShowChartsChange(Boolean(v))} />
           <Label htmlFor="charts" className="cursor-pointer">
             Charts anzeigen
-          </Label>
-        </div>
-
-        {/* Pack mode — works for both the genetic DQN and the Q-table backend */}
-        <div className="flex items-center gap-2">
-          <Checkbox id="pack" checked={pack} onCheckedChange={(v) => setPack(Boolean(v))} />
-          <Label htmlFor="pack" className="cursor-pointer">
-            Rudel-Evolution (Pack-Modus)
           </Label>
         </div>
 

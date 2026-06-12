@@ -68,7 +68,6 @@ def car_to_dict(car: CarFrame) -> dict:
         "checkpoint": int(car["checkpoint"]), "progress": float(car["progress"]),
         "lap": int(car["lap"]),
         "rays": [float(r) for r in car["rays"]],
-        "pack": int(car["pack"]),
         "score": float(car["score"]),
         "reward_parts": {k: float(v) for k, v in zip(REWARD_PARTS, car["reward_parts"])},
         "generation": int(car["generation"]),
@@ -128,5 +127,4 @@ def stats_to_dict(stats: dict) -> dict:
         "epsilon": float(stats.get("epsilon", 1.0)),
         "best_fitness": float(stats.get("best_fitness", 0.0)),
         "mean_fitness": float(stats.get("mean_fitness", 0.0)),
-        "n_packs": int(stats.get("n_packs", 0)),
     }

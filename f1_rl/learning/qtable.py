@@ -10,11 +10,11 @@ from queue import Full, Queue
 import numpy as np
 
 from f1_rl.config import (
-    EPSILON_MIN, GAMMA, MIGRATION_RATE, MODEL_DIR, MUTATION_NOISE, MUTATION_RATE,
-    N_BEST_CLONES, N_PACKS, PACK_MIN_SURVIVORS, PACK_SUPPORT, QTABLE_N_POP, SAVE_EVERY,
+    EPSILON_MIN, GAMMA, MODEL_DIR, MUTATION_NOISE, MUTATION_RATE,
+    N_BEST_CLONES, QTABLE_N_POP, SAVE_EVERY,
     STAGNATION_GENS, STEPS_PER_GEN,
 )
-from f1_rl.learning.genetics import assign_packs, rank_select
+from f1_rl.learning.genetics import rank_select
 from f1_rl.simulation.environment import N_ACTIONS
 
 # Features die gebinned werden sollen (ihre indexe)
@@ -39,7 +39,6 @@ __all__ = [
     "bin_values_for_qtable", "init_q_table", "q_row", "greedy_action", "epsilon_greedy_policy", "temporal_difference_update",
     "save_q_table", "load_q_table", "policy_action", "inspect_trace", "q_learning_loop",
     "crossover_tables_biased", "mutate_table", "run_qtable_worker",
-    "breed_table_packs",
 ]
 
 def bin_values_for_qtable(obs: np.ndarray) -> tuple[int, ...]:
@@ -373,70 +372,6 @@ def _breed_table_generation(tables_out: list, fitnesses: list, hall_of_fame: lis
     return new_pop[:n_pop]
 
 
-# ── Rudel-/Pack-Zucht auf Tabellen (Pendant zu genetics.breed_packs) ──────────
-# Gruppen-Selektion: schwache Tabellen überleben über ihr Pack. Gleiche Mechanik
-# wie der Vektor-Trainer, nur mit den Tabellen-Operatoren (biased Crossover/Mutation).
-
-def breed_table_packs(tables_out: list, fitnesses: list, pack_ids,
-                      hall_of_fame: list, best_ever_table: QTable, n_pop: int,
-                      *, pack_support: float, migration_rate: float,
-                      min_survivors: int, mutation_rate: float,
-                      mutation_noise: float) -> list:
-    """Speziierte (Pack-)Zucht von Q-Tabellen — schwache DNA überlebt über ihr Pack.
-
-    tables_out/fitnesses sind global best-first sortiert; pack_ids ist gleich
-    ausgerichtet. Schritte wie genetics.breed_packs: effektive Fitness zieht
-    schwache Mitglieder zum Pack-Besten hoch, jedes Pack behält min_survivors,
-    Restplätze ∝ fitness-geteilter Pack-Stärke, Zucht innerhalb des Packs mit
-    migration_rate Genfluss zwischen Packs, Allzeit-Beste/HOF immer übernommen.
-    """
-    fitness_arr = np.asarray(fitnesses, dtype=np.float64)
-    pack_ids = np.asarray(pack_ids)
-    unique_packs = np.unique(pack_ids)
-
-    pack_best = {int(p): fitness_arr[pack_ids == p].max() for p in unique_packs}
-    effective = np.array(
-        [own + pack_support * max(0.0, pack_best[int(p)] - own)
-         for own, p in zip(fitness_arr, pack_ids)])
-
-    new_pop: list = [best_ever_table]                     # Allzeit-Beste (Referenz, read-only)
-    for _, elite in hall_of_fame[:2]:                     # Top-HOF-Eliten
-        if len(new_pop) < n_pop:
-            new_pop.append(elite)
-
-    # Pro-Pack-Überlebende (Mitglieder behalten globale fitness-desc Reihenfolge).
-    pack_members = {int(p): np.where(pack_ids == p)[0] for p in unique_packs}
-    for members in pack_members.values():
-        for idx in members[:min_survivors]:
-            if len(new_pop) < n_pop:
-                new_pop.append(tables_out[idx])
-
-    # Restplätze den Packs ∝ fitness-geteilter Stärke zuteilen.
-    strengths = np.array([effective[m].sum() / len(m) for m in pack_members.values()])
-    strengths = strengths - strengths.min() + 1e-6
-    pack_probs = strengths / strengths.sum()
-    pack_keys = list(pack_members.keys())
-
-    def select_in_pack(members):
-        """Rang-Selektion innerhalb eines Packs → (score, table)."""
-        return rank_select([(fitnesses[i], tables_out[i]) for i in members])
-
-    while len(new_pop) < n_pop:
-        if np.random.random() < migration_rate and len(pack_keys) > 1:
-            ia, ib = np.random.choice(len(pack_keys), 2, replace=False)
-            score_a, parent_a = select_in_pack(pack_members[pack_keys[ia]])
-            score_b, parent_b = select_in_pack(pack_members[pack_keys[ib]])
-        else:
-            chosen = pack_keys[np.random.choice(len(pack_keys), p=pack_probs)]
-            score_a, parent_a = select_in_pack(pack_members[chosen])
-            score_b, parent_b = select_in_pack(pack_members[chosen])
-        child = crossover_tables_biased(parent_a, parent_b, score_a, score_b)
-        child = mutate_table(child, mutation_rate, mutation_noise)
-        new_pop.append(child)
-
-    return new_pop[:n_pop]
-
-
 # ── Persistenz des Trainingsstands ────────────────────────────────────────────
 
 def _write_state(circuit: str, steps: int, total: int, epsilon: float,
@@ -473,7 +408,6 @@ def q_learning_loop(
     resume: bool = False,
     steps_per_gen: int = STEPS_PER_GEN,
     total_gens: int | None = None,
-    evolution_mode: str = "qtable",   # "qtable" = klassisch, "qtable_pack" = Rudel-Selektion
     use_rays: bool = True,
     cancel_event=None,
     table_queue: Queue | None = None,  # Live-Stream der vollen Tabelle (nur Q-Table-Modus)
@@ -484,10 +418,6 @@ def q_learning_loop(
     (Q-Learning) und wird greedy bewertet. Danach selektiert/kreuzt/mutiert
     der GA die Tabellen pro Generation. Gleiche Umgebung, gleiches WebSocket-Protokoll und
     dieselbe Live-Population-Ansicht wie der DQN-Trainer — nur die Policy ist eine Q-Tabelle.
-
-    evolution_mode "qtable_pack" aktiviert die Rudel-/Gruppen-Selektion (wie beim DQN):
-    Tabellen werden nach Endposition + Score in Packs geclustert und pro Pack gezüchtet,
-    sodass schwache Tabellen über ihr Pack überleben.
     """
     from f1_rl.learning.display import run_population_display
     from f1_rl.learning.evolution import (
@@ -507,7 +437,6 @@ def q_learning_loop(
     if total_gens is None:
         total_gens = 200
     n_pop = QTABLE_N_POP
-    use_packs = evolution_mode == "qtable_pack"   # Rudel-/Gruppen-Selektion an?
 
     # ── Population initialisieren / Resume ───────────────────────────────────
     population, start_gen, best_ever_fitness = _init_table_population(resume, save_path, n_pop)
@@ -519,10 +448,8 @@ def q_learning_loop(
     last_line_t = 0.0   # drosselt das Racing-Line-Replay (pure-Python, ~Tausende Steps)
 
     pop_holder = [list(population)]    # Display-Thread liest pop_holder[0]
-    pack_holder = [[0] * n_pop]        # parallele Pack-IDs für die Schwarm-Färbung
     gen_holder = [start_gen]
     stop_event = threading.Event()
-    print(f"[qtable] Evolution mode: {evolution_mode}")
 
     print(f"[qtable] Genetic tabular Q-learning  {n_pop} agents x {steps_per_gen} steps/gen "
           f"x {total_gens} gens  features={len(FEATURE_IDX)} bins={N_BINS} alpha={LEARNING_RATE} gamma={GAMMA}")
@@ -542,7 +469,6 @@ def q_learning_loop(
                 inspect_queue=inspect_queue,
                 table_queue=table_queue,
                 make_table_payload=_table_heatmap_payload,
-                pack_holder=pack_holder if use_packs else None,
             ),
             daemon=True,
         )
@@ -597,39 +523,18 @@ def q_learning_loop(
                         best_ever_table, policy_action_readonly, track,
                         eval_steps, use_rays=use_rays))
 
-            # 3. Pack-Zuordnung (nur Rudel-Modus): Tabellen nach Endposition +
-            #    Score clustern, ähnlich fahrende Autos landen im selben Pack.
-            pack_ids = [0] * n_pop
-            if use_packs:
-                descriptors = np.array(
-                    [[gx, gy, fit] for (gx, gy), fit in zip(ghost_positions, fitnesses)],
-                    dtype=np.float64,
-                )
-                pack_ids = assign_packs(descriptors, N_PACKS).tolist()
-
-            # Sortierte Population + Pack-Farben + Generation an die Live-Anzeige übergeben.
+            # 3. Sortierte Population + Generation an die Live-Anzeige übergeben.
             gen_holder[0] = gen
             pop_holder[0] = list(tables_out)
-            pack_holder[0] = list(pack_ids)
 
             # 4. Stagnation → Mutation hochregeln.
             prev_best_eval, stagnation_count, stagnation_boost = update_stagnation(
                 prev_best_eval, stagnation_count, fitnesses[0])
 
-            # 5. Nächste Generation züchten (Pack-Selektion oder klassisch).
-            if use_packs:
-                population = breed_table_packs(
-                    tables_out, fitnesses, pack_ids, hall_of_fame, best_ever_table, n_pop,
-                    pack_support  = PACK_SUPPORT,
-                    migration_rate= MIGRATION_RATE,
-                    min_survivors = PACK_MIN_SURVIVORS,
-                    mutation_rate = MUTATION_RATE  * stagnation_boost,
-                    mutation_noise= MUTATION_NOISE * stagnation_boost,
-                )
-            else:
-                population = _breed_table_generation(
-                    tables_out, fitnesses, hall_of_fame, best_ever_table,
-                    stagnation_count, stagnation_boost, n_pop)
+            # 5. Nächste Generation züchten.
+            population = _breed_table_generation(
+                tables_out, fitnesses, hall_of_fame, best_ever_table,
+                stagnation_count, stagnation_boost, n_pop)
 
             # 6. Stats + Checkpoint.
             best_states = len(tables_out[0])
@@ -643,8 +548,6 @@ def q_learning_loop(
                         "generation":   gen,
                         "best_fitness": fitnesses[0],
                         "mean_fitness": float(np.mean(fitnesses)),
-                        # Im Pack-Modus die Pack-Anzahl, sonst Zustände der besten Tabelle.
-                        "n_packs":      len(set(pack_ids)) if use_packs else best_states,
                     })
                 except Full:
                     pass

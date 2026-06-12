@@ -47,13 +47,3 @@ def rank_color_size(frac: float) -> tuple[tuple[int, int, int], int]:
     return (110, 40, 40), 3                       # dark red — bottom half
 
 
-# ── Pack colours for swarm mode ───────────────────────────────────────────────
-
-_PACK_PALETTE = [
-    (0, 170, 255), (255, 120, 0), (180, 90, 255), (0, 210, 120),
-    (255, 60, 140), (230, 210, 0), (120, 200, 255), (255, 160, 90),
-]
-
-
-def pack_color(pack_id: int) -> tuple[int, int, int]:
-    return _PACK_PALETTE[int(pack_id) % len(_PACK_PALETTE)]
