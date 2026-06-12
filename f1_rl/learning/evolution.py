@@ -69,6 +69,19 @@ def update_hall_of_fame(hall_of_fame: list, fitnesses: list, individuals: list,
             break
 
 
+def update_top_scores(top_scores: list, best_fitness: float, gen: int) -> None:
+    """Pflegt das Scoreboard der zehn besten Generations-Ergebnisse (in place).
+
+    Jeder Eintrag ist ``(score, generation)``, best first — die Web-Anzeige
+    (Hud) und die alte Pygame-Ansicht rendern daraus die Top-10-Liste.
+    """
+    if len(top_scores) < 10 or best_fitness > top_scores[-1][0]:
+        top_scores.append((best_fitness, gen))
+        top_scores.sort(key=lambda entry: entry[0], reverse=True)
+        if len(top_scores) > 10:
+            top_scores.pop()
+
+
 def update_stagnation(prev_best: float, stagnation_count: int,
                       best_fitness: float) -> tuple[float, int, float]:
     """Stagnations-Erkennung: bleibt der Bestwert stecken, wird die Mutation

@@ -53,6 +53,7 @@ export interface StatsMsg {
   epsilon: number
   best_fitness: number
   mean_fitness: number
+  top_scores: [number, number][] // Scoreboard: [score, generation], best first
 }
 
 export interface StatusMsg {

@@ -1,8 +1,8 @@
 {
-  "timesteps_done": 11000000,
+  "timesteps_done": 6000000,
   "total_timesteps": 10000000000,
-  "circuit": "Circuit de Monaco",
-  "epsilon": 0.1449999999999999,
-  "generation": 54,
-  "best_fitness": 46032.03331399687
+  "circuit": "Autodromo Enzo e Dino Ferrari",
+  "epsilon": 0.5408333333333334,
+  "generation": 29,
+  "best_fitness": 67446.19800176406
 }

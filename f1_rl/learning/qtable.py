@@ -422,7 +422,7 @@ def q_learning_loop(
     from f1_rl.learning.display import run_population_display
     from f1_rl.learning.evolution import (
         epsilon_for_generation, eval_step_budget, update_auto_speed,
-        update_hall_of_fame, update_stagnation,
+        update_hall_of_fame, update_stagnation, update_top_scores,
     )
     from f1_rl.learning.replay import emit_racing_line, record_greedy_replay
     from f1_rl.simulation.track_loader import load_track
@@ -442,6 +442,7 @@ def q_learning_loop(
     population, start_gen, best_ever_fitness = _init_table_population(resume, save_path, n_pop)
     best_ever_table = population[0]
     hall_of_fame: list[tuple[float, QTable]] = []
+    top_scores: list[tuple[float, int]] = []   # Scoreboard: (Score, Generation), best first
     stagnation_count = 0
     prev_best_eval = -1e9
     steps_so_far = 0
@@ -537,6 +538,7 @@ def q_learning_loop(
                 stagnation_count, stagnation_boost, n_pop)
 
             # 6. Stats + Checkpoint.
+            update_top_scores(top_scores, fitnesses[0], gen)
             best_states = len(tables_out[0])
             steps_so_far = (gen - start_gen + 1) * n_pop * steps_per_gen
             if stats_queue is not None:
@@ -548,6 +550,7 @@ def q_learning_loop(
                         "generation":   gen,
                         "best_fitness": fitnesses[0],
                         "mean_fitness": float(np.mean(fitnesses)),
+                        "top_scores":   list(top_scores),
                     })
                 except Full:
                     pass

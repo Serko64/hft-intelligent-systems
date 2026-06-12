@@ -127,4 +127,5 @@ def stats_to_dict(stats: dict) -> dict:
         "epsilon": float(stats.get("epsilon", 1.0)),
         "best_fitness": float(stats.get("best_fitness", 0.0)),
         "mean_fitness": float(stats.get("mean_fitness", 0.0)),
+        "top_scores": [[float(score), int(gen)] for score, gen in stats.get("top_scores", [])],
     }

@@ -33,7 +33,7 @@ from f1_rl.config import (
 )
 from f1_rl.learning.evolution import (
     epsilon_for_generation, eval_step_budget, update_auto_speed,
-    update_hall_of_fame, update_stagnation,
+    update_hall_of_fame, update_stagnation, update_top_scores,
 )
 from f1_rl.learning.genetics import crossover, mutate, rank_select
 from f1_rl.learning.replay import emit_racing_line
@@ -242,6 +242,7 @@ def train(
     best_ever_weight_vector: np.ndarray = population[0].copy()
 
     hall_of_fame: list[tuple[float, np.ndarray]] = []
+    top_scores: list[tuple[float, int]] = []     # Scoreboard: (Score, Generation), best first
     stagnation_count  = 0
     prev_best_eval    = -1e9
 
@@ -320,6 +321,7 @@ def train(
                 hall_of_fame, best_ever_weight_vector, stagnation_count, stagnation_boost)
 
             # 6. Stats melden + Checkpoint ─────────────────────────────────
+            update_top_scores(top_scores, fitnesses[0], gen)
             steps_so_far = (gen - start_gen + 1) * N_POP * steps_per_gen
             if stats_queue is not None:
                 try:
@@ -331,6 +333,7 @@ def train(
                         "best_fitness":    fitnesses[0],
                         "mean_fitness":    float(np.mean(fitnesses)),
                         "ghost_positions": ghost_positions,
+                        "top_scores":      list(top_scores),
                     })
                 except Full:
                     pass
