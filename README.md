@@ -99,3 +99,85 @@ npm run dev
   Datenfluss alternativ über einen WebSocket. Frames landen in einem React-`ref`,
   den die three.js-Schleife (`web/src/three/TrackScene.ts`) direkt liest — so
   rendert React nicht bei jedem Frame neu.
+
+## Code-Referenz (Backend)
+
+Die Module sind bewusst ohne Docstrings gehalten — die Verantwortlichkeiten stehen
+hier, die Detail-Semantik einzelner Felder in den Inline-Kommentaren am Code.
+
+### Module im Detail
+
+**Simulation (`f1_rl/simulation/`)**
+
+- `environment.py` – kinematische Fahrsimulation als reine Funktionen:
+  `create_car_env(track)` → env, `reset_env(env)` → obs,
+  `step_env(env, action)` → `(obs, reward, terminated, truncated, info)` (gym-Konvention).
+  Der Auto-Zustand ist ein Dict (`CarEnv`), das pro Frame ans UI gestreamte Bild ein
+  `CarFrame`. **Grip-Kreis:** Quer- und Längsbeschleunigung teilen sich ein
+  Reibungsbudget — zu hartes Einlenken führt zu Untersteuern statt magischer Drehung.
+  **Curriculum:** die Optimierungs-Rewards (Tempo/Sanftheit/Zeit) zählen erst, nachdem
+  ein Auto die erste volle Runde geschafft hat.
+- `track_loader.py` – baut das `Track`-Dict aus OSM-Daten (osmnx) oder einer
+  GeoJSON-Datei; die kuratierte GeoJSON hat Vorrang vor Live-OSM. Enthält Centerline
+  (in Metern), befahrbaren Korridor und vorberechnete Pixel-Koordinaten; OSM-Strecken
+  werden als `.pkl` gecacht (`TRACK_CACHE_VERSION` bei Formatänderung hochzählen).
+- `track_render.py` – bäckt ein `Track` einmal in eine pygame-Surface (3×
+  Supersampling für Antialiasing, pro Track gecacht).
+
+**Lernen (`f1_rl/learning/`)**
+
+- `network.py` – die *einzige* Netz-Definition (kleines PyTorch-MLP
+  `N_OBS → NET_HIDDEN → N_ACTIONS`). `flat_to_network`/`network_to_flat` wandeln
+  zwischen Modul und flachem float32-Vektor — auf dem Vektor arbeitet der GA. Architektur
+  zentral über `config.NET_HIDDEN` ändern.
+- `agent.py` – Inferenz: `neural_net_from_weights`, `load_neural_net`, `act` (beste
+  Aktion), `forward_trace` (Q-Werte + Post-ReLU-Aktivierungen fürs Inspect-Panel).
+- `genetics.py` – GA-Operatoren auf flachen Vektoren: `crossover`, `mutate`, `rank_select`.
+- `evolution.py` – geteilte Generations-Bausteine: Epsilon-Schedule, Eval-Budget,
+  Hall of Fame, Top-Scoreboard, Stagnations-Boost, Auto-Speed.
+- `worker.py` – trainiert *ein* GA-Individuum per Double DQN (vorab allozierter
+  numpy-Replay-Buffer + ε-greedy) in einem eigenen Prozess, bewertet es greedy und gibt
+  `(fitness, weights, end_x, end_y)` zurück. CUDA wird bei Verfügbarkeit mit größerem
+  Batch genutzt.
+- `qtable.py` – tabellarisches Q-Learning als genetische Population von Q-Tabellen;
+  `q_learning_loop` spiegelt `trainer.py`. **Invariante:** eine fertige Tabelle wird nie
+  mehr in place verändert, daher dürfen Crossover/Mutation unveränderte Q-Zeilen
+  referenzieren (copy-on-write).
+- `trainer.py` – genetische DQN-Generationsschleife: pro Generation `N_POP` Worker
+  parallel, nach Fitness sortieren, Hall of Fame pflegen, nächste Generation züchten
+  (Rang-Selektion/Crossover/Mutation). Übernimmt auch die Persistenz
+  (Checkpoints/Trainingsstand). `cancel_event` stoppt sauber an der Generationsgrenze.
+- `display.py` – gemeinsame Live-Anzeige (~60 fps) für beide Backends über die
+  Callbacks `build_policy`/`choose_action`/`inspect_trace_fn`. **Soft-Swap:** bei neuer
+  Generation fährt jedes Auto mit seiner alten Policy bis zum natürlichen Crash weiter
+  (kein Massen-Teleport); `MAX_DISPLAY_LAG` begrenzt den Verzug.
+- `replay.py` – zeichnet die beste greedy Fahrt als Racing-Line auf und schickt sie ans
+  UI. Nur ein *neuer* Allzeit-Bestwert frischt die Linie auf, damit sie monoton besser wird.
+
+**Server / Desktop (`f1_rl/server/`, `f1_rl/desktop/`)**
+
+- `session.py` – hält *die eine* laufende Session (Training oder „Fahren"), den
+  Worker-Thread und die Queues (`SessionState`-Dict). Ein neuer Start stoppt den
+  vorherigen Lauf über ein frisches `stop_event`.
+- `protocol.py` – Serialisierung zwischen den Sim-Dicts und dem JSON fürs Frontend; alle
+  Koordinaten in **Metern** (das Frontend skaliert/zentriert).
+- `utils/queues.py` – `put_latest`/`get_latest`: behalten nur den neuesten Eintrag
+  (das UI will immer den aktuellsten Stand) und schlucken Fehler bewusst.
+- `desktop/api.py`, `desktop/main.py` – pywebview-Bridge: JavaScript ruft `Api.*` direkt
+  und zieht Frames per `poll()`.
+- `config.py` – zentrale Konstanten, Pfade und UI-Einstellungen (jede Konstante ist am
+  Code kommentiert).
+
+### Beobachtung & Aktion
+
+- **Beobachtung** = 14 Werte, normiert auf `[-1, 1]` bzw. `[0, 1]`:
+  `[0]` x, `[1]` y, `[2]` Heading-Abweichung/π, `[3]` Tempo, `[4]` Fortschritt,
+  `[5]` Abstand links, `[6]` Abstand rechts, `[7]…[13]` 7 Lidar-Strahlen (−75°…+75°).
+- **Aktion** = einer von 20 diskreten `(Lenkung, Gas)`-Werten (5 Lenk- × 4 Gas-Stufen).
+
+### Datenstrukturen
+
+Statt Klassen nutzt das Backend einfache Dicts mit `TypedDict`-Beschreibung; die Felder
+sind jeweils direkt am `TypedDict` kommentiert:
+`Track` (`track_loader.py`), `CarEnv`/`CarFrame` (`environment.py`),
+`SessionState` (`session.py`).

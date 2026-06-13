@@ -1,9 +1,3 @@
-"""Track rendering: bake a Track dict into a pygame surface (asphalt, kerbs,
-boundary lines, dashed centerline). The baked surface is cached per track so
-it is only drawn once.
-"""
-from __future__ import annotations
-
 import math
 
 import pygame
@@ -44,7 +38,6 @@ def _draw_kerbs(surface, pts: list, kerb_px: float, thickness: int) -> None:
 
 
 def _bake_track(track: Track) -> object:
-    """Render track once at 3× resolution, smoothscale to native — gives free AA."""
     S = 3  # supersampling factor
 
     big = pygame.Surface((track["canvas_w"] * S, track["canvas_h"] * S))
@@ -60,14 +53,11 @@ def _bake_track(track: Track) -> object:
         if track["corridor_interior_px"] is not None else None
     )
 
-    # Shadow
     shadow = [(x + 6 * S, y + 6 * S) for x, y in pts_out]
     pygame.draw.polygon(big, (8, 8, 8), shadow)
 
-    # Asphalt
     pygame.draw.polygon(big, (52, 52, 58), pts_out)
 
-    # Inner grass
     if pts_inn:
         pygame.draw.polygon(big, GRASS_COLOR, pts_inn)
 

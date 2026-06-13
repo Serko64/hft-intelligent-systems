@@ -1,20 +1,3 @@
-"""Genetischer DQN-Trainer: die Generationsschleife, die DQN + GA verbindet.
-
-Pro Generation:
-  1. N_POP Worker parallel laufen lassen — jeder trainiert per Double-DQN auf
-     seinen geerbten Gewichten und fährt eine Eval-Runde für die Fitness
-     (siehe worker.run_worker).
-  2. Nach Fitness sortieren, eine Hall of Fame der Eliten pflegen, die Racing-Line
-     bei neuem Bestwert aufzeichnen.
-  3. Die nächste Generation mit den genetischen Operatoren züchten
-     (Rang-Selektion, Crossover, Mutation).
-
-Dieses Modul übernimmt auch die Persistenz (Checkpoints, Trainingsstand). Die
-Live-Anzeige der Population liegt in display.py, die Racing-Line in replay.py und
-die geteilten Generations-Bausteine (Epsilon, Hall of Fame, …) in evolution.py.
-"""
-from __future__ import annotations
-
 import json
 import os
 import threading
@@ -38,8 +21,6 @@ from f1_rl.learning.evolution import (
 from f1_rl.learning.genetics import crossover, mutate, rank_select
 from f1_rl.learning.replay import emit_racing_line
 
-
-# ── Persistenz ────────────────────────────────────────────────────────────────
 
 def load_training_state() -> dict | None:
     if os.path.exists(STATE_PATH):
@@ -65,41 +46,30 @@ def _write_state(circuit: str, steps: int, total: int, epsilon: float,
         )
 
 
-# ── Racing-Line-Aufzeichnung ────────────────────────────────────────────────────
-
 def _record_replay(weights: np.ndarray, track, max_steps: int = 6000,
                    use_rays: bool = True) -> np.ndarray:
-    """Baut aus dem Gewichtsvektor ein Netz und zeichnet eine greedy Fahrt auf."""
-    from f1_rl.learning.agent import act, neuronal_net_from_weights
+    from f1_rl.learning.agent import act, neural_net_from_weights
     from f1_rl.learning.replay import record_greedy_replay
-    net = neuronal_net_from_weights(weights)
+    net = neural_net_from_weights(weights)
     return record_greedy_replay(net, act, track, max_steps, use_rays=use_rays)
 
 
-# ── Generations-Bausteine ───────────────────────────────────────────────────────
-
 def _init_population(resume: bool, save_path: str, amount_of_weights: int) -> tuple[list, int, float]:
-    """Baut die Start-Population.
-
-    Gibt (population, start_gen, best_ever_fitness) zurück. Mit ``resume`` und
-    passendem Checkpoint wird die Population aus dem gespeicherten Besten (plus
-    mutierte Kopien) geseedet und Generation/Fitness wiederhergestellt; sonst
-    startet eine frische Zufalls-Population ab Generation 0.
-    """
     from f1_rl.learning.network import random_weights
 
     if resume and os.path.exists(save_path):
         loaded = np.load(save_path)
         if loaded.ndim == 1 and len(loaded) == amount_of_weights:
             best_w = loaded.astype(np.float32)
-            saved  = load_training_state() or {}
+            saved = load_training_state() or {}
             start_gen = int(saved.get("generation", 0))
             best_ever_fitness = float(saved.get("best_fitness", -1e9))
             population = [best_w.copy()] + [
                 mutate(best_w, MUTATION_RATE * 3, MUTATION_NOISE * 2)
                 for _ in range(N_POP - 1)
             ]
-            print(f"[train] Resumed gen={start_gen}  best_fitness={best_ever_fitness:.1f}")
+            print(
+                f"[train] Resumed gen={start_gen}  best_fitness={best_ever_fitness:.1f}")
             return population, start_gen, best_ever_fitness
         print(f"[train] Incompatible checkpoint (shape {loaded.shape}, "
               f"expected ({amount_of_weights},)) — starting fresh")
@@ -108,47 +78,35 @@ def _init_population(resume: bool, save_path: str, amount_of_weights: int) -> tu
 
 
 def _evaluate_population(executor, population, track, steps_per_gen, epsilon,
-                        eval_steps, use_rays) -> tuple[list, list, list]:
-    """Ein DDQN-Worker pro Individuum, Ergebnisse best-first sortiert zurück.
-
-    Gibt (fitnesses, weights_out, ghost_positions) zurück; jede Liste ist nach
-    Rang ausgerichtet, Index 0 ist das fitnessstärkste Individuum.
-    """
+                         eval_steps, use_rays) -> tuple[list, list, list]:
     from f1_rl.learning.worker import run_worker
 
     results = list(executor.map(
         run_worker,
-        [(w.copy(), track, steps_per_gen, epsilon, eval_steps, use_rays) for w in population],
+        [(w.copy(), track, steps_per_gen, epsilon, eval_steps, use_rays)
+         for w in population],
         chunksize=1,
     ))
-    fitnesses       = [r[0] for r in results]
-    weights_out     = [r[1] for r in results]
+    fitnesses = [r[0] for r in results]
+    weights_out = [r[1] for r in results]
     ghost_positions = [(r[2], r[3]) for r in results]
 
-    order = sorted(range(len(fitnesses)), key=lambda i: fitnesses[i], reverse=True)
+    order = sorted(range(len(fitnesses)),
+                   key=lambda i: fitnesses[i], reverse=True)
     return (
-        [fitnesses[i]       for i in order],
-        [weights_out[i]     for i in order],
+        [fitnesses[i] for i in order],
+        [weights_out[i] for i in order],
         [ghost_positions[i] for i in order],
     )
 
 
 def _copy_weight_vector(weights: np.ndarray) -> np.ndarray:
-    """copy_individual-Callback für die Hall of Fame: Gewichtsvektoren werden
-    kopiert, weil die GA-Operatoren sie sonst später verändern könnten."""
     return weights.copy()
 
 
 def _breed_next_generation(weights_out,
-                          hall_of_fame, best_ever_w, stagnation_count,
-                          stagnation_boost) -> list:
-    """Erzeugt die nächste Generation aus den Ergebnissen dieser Generation.
-
-    HOF-Eliten überleben unverändert, leicht mutierte Klone des Allzeit-Besten
-    ergänzen sie, der Rest sind Crossover-Kinder mit von ~0 (elite-nah) bis voll
-    (Schwanz) ansteigender Mutation. Bei starker Stagnation wird ein Slot durch
-    ein frisches Zufalls-Individuum ersetzt.
-    """
+                           hall_of_fame, best_ever_w, stagnation_count,
+                           stagnation_boost) -> list:
     from f1_rl.learning.network import random_weights
 
     hof_weights = [w for _, w in hall_of_fame]
@@ -171,11 +129,13 @@ def _breed_next_generation(weights_out,
               else rank_select(weights_out))
         pb = rank_select(weights_out)
         child = crossover(pa, pb)
-        rank_factor = (len(new_pop) - n_protected) / max(N_POP - n_protected, 1)
+        rank_factor = (len(new_pop) - n_protected) / \
+            max(N_POP - n_protected, 1)
         child = mutate(
             child,
-            rate  = MUTATION_RATE  * stagnation_boost * (0.3 + rank_factor * 0.7),
-            noise = MUTATION_NOISE * stagnation_boost * (0.3 + rank_factor * 0.7),
+            rate=MUTATION_RATE * stagnation_boost * (0.3 + rank_factor * 0.7),
+            noise=MUTATION_NOISE * stagnation_boost *
+            (0.3 + rank_factor * 0.7),
         )
         new_pop.append(child)
 
@@ -206,15 +166,11 @@ def train(
     total_gens: int | None = None,
     use_rays: bool = True,
     cancel_event=None,
-    table_queue: Queue | None = None,  # accepted & ignored (q-table backend only)
+    # accepted & ignored (q-table backend only)
+    table_queue: Queue | None = None,
 ) -> tuple[object, object]:
-    """Genetisches DQN: N_POP parallele DDQN-Worker, pro Generation vom GA evolviert.
-
-    cancel_event: optionales threading.Event — gesetzt, stoppt das Training sauber
-                  an der nächsten Generationsgrenze (die laufende Generation endet zuerst).
-    """
     # torch-lastige Imports erst hier, damit Menü/UI schnell starten.
-    from f1_rl.learning.agent import neuronal_net_from_weights
+    from f1_rl.learning.agent import neural_net_from_weights
     from f1_rl.learning.network import n_params
     from f1_rl.simulation.track_loader import load_track
 
@@ -238,17 +194,20 @@ def train(
     )
 
     # ── Population initialisieren / fortsetzen ───────────────────────────────
-    population, start_gen, best_ever_fitness = _init_population(resume, save_path, n_w)
+    population, start_gen, best_ever_fitness = _init_population(
+        resume, save_path, n_w)
     best_ever_weight_vector: np.ndarray = population[0].copy()
 
     hall_of_fame: list[tuple[float, np.ndarray]] = []
-    top_scores: list[tuple[float, int]] = []     # Scoreboard: (Score, Generation), best first
-    stagnation_count  = 0
-    prev_best_eval    = -1e9
+    # Scoreboard: (Score, Generation), best first
+    top_scores: list[tuple[float, int]] = []
+    stagnation_count = 0
+    prev_best_eval = -1e9
 
-    pop_holder  = [list(population)]        # Display-Thread liest pop_holder[0]
-    gen_holder  = [start_gen]                # aktuelle Generation, für die Auto-Färbung
-    stop_event  = threading.Event()
+    pop_holder = [list(population)]        # Display-Thread liest pop_holder[0]
+    # aktuelle Generation, für die Auto-Färbung
+    gen_holder = [start_gen]
+    stop_event = threading.Event()
 
     if render_queue is not None:
         from f1_rl.learning.agent import act, forward_trace
@@ -257,7 +216,7 @@ def train(
             target=run_population_display,
             args=(pop_holder, stop_event, track, render_queue),
             kwargs=dict(
-                build_policy=neuronal_net_from_weights,   # Gewichtsvektor → fertiges Netz
+                build_policy=neural_net_from_weights,   # Gewichtsvektor → fertiges Netz
                 choose_action=act,
                 inspect_trace_fn=forward_trace,
                 use_rays=use_rays,
@@ -307,8 +266,8 @@ def train(
                     max_steps=eval_steps, use_rays=use_rays))
 
             # 3. Sortierte Population + Generation an die Anzeige geben.
-            gen_holder[0]  = gen
-            pop_holder[0]  = list(weights_out)
+            gen_holder[0] = gen
+            pop_holder[0] = list(weights_out)
 
             # 4. Stagnation: je länger der Bestwert feststeckt, desto stärker wird
             #    die Mutation hochgeregelt (stagnation_boost), um das Plateau zu verlassen.
@@ -369,7 +328,7 @@ def train(
     _write_state(track["name"], total_timesteps, total_timesteps,
                  EPSILON_MIN, start_gen + total_gens - 1, best_ever_fitness)
     print(f"[train] Done. Best weights → {save_path}")
-    return neuronal_net_from_weights(best_ever_weight_vector), track
+    return neural_net_from_weights(best_ever_weight_vector), track
 
 
 if __name__ == "__main__":

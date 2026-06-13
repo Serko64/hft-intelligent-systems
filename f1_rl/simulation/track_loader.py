@@ -1,12 +1,3 @@
-"""Streckenladen: baut ein Track-Dict aus OSM-Daten oder einer GeoJSON-Datei.
-
-Ein Track ist ein einfaches Dict (Typ-Beschreibung: ``Track``) und enthält alles,
-was der Rest der App über eine Strecke wissen muss: die Centerline (in Metern),
-den befahrbaren Korridor und vorberechnete Pixel-Koordinaten fürs Zeichnen.
-Das Zeichnen selbst lebt in track_render.py.
-"""
-from __future__ import annotations
-
 import json
 import math
 import os
@@ -23,34 +14,31 @@ CANVAS_W = 1600
 CANVAS_H = 1000
 PAD = 80
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "circuits", "_cache")
-# Version des Cache-Formats. Hochzählen, wenn sich der Aufbau des Track-Dicts
-# ändert — alte Cache-Dateien werden dann einfach ignoriert und neu gebaut.
+CACHE_DIR = os.path.join(os.path.dirname(
+    __file__), "..", "..", "circuits", "_cache")
+# Cache-Format-Version: hochzählen, wenn sich der Track-Aufbau ändert.
 TRACK_CACHE_VERSION = 2
 
 
 class Track(TypedDict):
-    """Typ-Beschreibung für das Track-Dict (keine echte Klasse — zur Laufzeit
-    ist ein Track ein ganz normales Dict mit genau diesen Schlüsseln)."""
     name: str
     centerline_m: LineString    # Streckenmitte in Metern (shapely-Linie)
     corridor: Polygon           # befahrbare Fläche (Centerline ± half_width_m)
     total_length_m: float
-    centerline_px: np.ndarray   # (N, 2) float32 — Pixel-Koordinaten fürs Zeichnen
+    centerline_px: np.ndarray   # (N, 2) float32 — Pixel-Koordinaten
     corridor_px: np.ndarray     # (M, 2) float32 — äußerer Rand in Pixeln
     canvas_w: int
     canvas_h: int
-    px_scale: float             # Meter → Pixel Umrechnungsfaktor
+    px_scale: float             # Meter → Pixel
     px_origin_x: float
-    px_origin_y: float          # Y ist gespiegelt (Bildschirm-Y wächst nach unten)
-    bounds_center: tuple[float, float]   # Mittelpunkt der Strecke (Meter)
-    half_diag_m: float          # halbe Diagonale der Bounding-Box (zur Normierung)
+    px_origin_y: float          # Y ist gespiegelt
+    bounds_center: tuple[float, float]
+    half_diag_m: float          # halbe Diagonale der Bounding-Box
     half_width_m: float         # halbe Streckenbreite — für die Crash-Prüfung
-    corridor_interior_px: np.ndarray | None  # innerer Rand in Pixeln, oder None
+    corridor_interior_px: np.ndarray | None
 
 
 def _project_linestring(line_wgs84: LineString) -> tuple[LineString, Transformer]:
-    """Projiziert GPS-Koordinaten (Längen-/Breitengrad) in ein lokales Meter-System."""
     centroid = line_wgs84.centroid
     projection = (
         f"+proj=tmerc +lat_0={centroid.y} +lon_0={centroid.x}"
@@ -90,7 +78,8 @@ def _build_track(
 
     centerline_px = to_px(centerline_m.coords)
     corridor_px = to_px(corridor.exterior.coords)
-    corridor_interior_px = to_px(corridor.interiors[0].coords) if corridor.interiors else None
+    corridor_interior_px = to_px(
+        corridor.interiors[0].coords) if corridor.interiors else None
 
     center_x = (min_x + max_x) / 2
     center_y = (min_y + max_y) / 2
@@ -124,7 +113,8 @@ def load_track_osmnx(
 ) -> Track:
     os.makedirs(CACHE_DIR, exist_ok=True)
     safe_name = "".join(c if c.isalnum() else "_" for c in query)
-    cache_path = os.path.join(CACHE_DIR, f"{safe_name}_v{TRACK_CACHE_VERSION}.pkl")
+    cache_path = os.path.join(
+        CACHE_DIR, f"{safe_name}_v{TRACK_CACHE_VERSION}.pkl")
 
     if os.path.exists(cache_path):
         try:
@@ -139,11 +129,13 @@ def load_track_osmnx(
     # features_from_address sucht im Umkreis von `dist` Metern um den geocodierten
     # Punkt — zuverlässiger als features_from_place für benannte Rennstrecken.
     try:
-        gdf = ox.features_from_address(query, tags={"highway": "raceway"}, dist=10_000)
+        gdf = ox.features_from_address(
+            query, tags={"highway": "raceway"}, dist=10_000)
     except Exception:
         gdf = ox.features_from_place(query, tags={"highway": "raceway"})
 
-    geom_rows = gdf[gdf.geometry.geom_type.isin(["LineString", "MultiLineString"])]
+    geom_rows = gdf[gdf.geometry.geom_type.isin(
+        ["LineString", "MultiLineString"])]
     if geom_rows.empty:
         raise ValueError(f"No raceway geometry found for '{query}'")
 
