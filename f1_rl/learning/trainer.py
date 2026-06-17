@@ -59,6 +59,7 @@ def _init_population(resume: bool, save_path: str, amount_of_weights: int) -> tu
 
     if resume and os.path.exists(save_path):
         loaded = np.load(save_path)
+        # Abgespeicherte Modell muss gleiche gewichtsanzahl haben wie gebraucht
         if loaded.ndim == 1 and len(loaded) == amount_of_weights:
             best_w = loaded.astype(np.float32)
             saved = load_training_state() or {}
@@ -78,12 +79,12 @@ def _init_population(resume: bool, save_path: str, amount_of_weights: int) -> tu
 
 
 def _evaluate_population(executor, population, track, steps_per_gen, epsilon,
-                         eval_steps, use_rays) -> tuple[list, list, list]:
+                         eval_steps, use_rays, multi_start=False) -> tuple[list, list, list]:
     from f1_rl.learning.worker import run_worker
 
     results = list(executor.map(
         run_worker,
-        [(w.copy(), track, steps_per_gen, epsilon, eval_steps, use_rays)
+        [(w.copy(), track, steps_per_gen, epsilon, eval_steps, use_rays, multi_start)
          for w in population],
         chunksize=1,
     ))
@@ -106,7 +107,7 @@ def _copy_weight_vector(weights: np.ndarray) -> np.ndarray:
 
 def _breed_next_generation(weights_out,
                            hall_of_fame, best_ever_w, stagnation_count,
-                           stagnation_boost) -> list:
+                           stagnation_boost, use_crossover=True) -> list:
     from f1_rl.learning.network import random_weights
 
     hof_weights = [w for _, w in hall_of_fame]
@@ -128,7 +129,10 @@ def _breed_next_generation(weights_out,
               if (hof_weights and np.random.random() < 0.5)
               else rank_select(weights_out))
         pb = rank_select(weights_out)
-        child = crossover(pa, pb)
+        # Crossover im Gewichtsraum ist bei neuronalen Netzen umstritten (competing
+        # conventions). Schalter aus -> reine Mutation eines selektierten Elternteils
+        # (Evolutionsstrategie-Stil) statt zwei Eltern zu mischen.
+        child = crossover(pa, pb) if use_crossover else pa.copy()
         rank_factor = (len(new_pop) - n_protected) / \
             max(N_POP - n_protected, 1)
         child = mutate(
@@ -166,6 +170,8 @@ def train(
     total_gens: int | None = None,
     use_rays: bool = True,
     cancel_event=None,
+    multi_start_eval: bool = False,
+    use_crossover: bool = True,
     # accepted & ignored (q-table backend only)
     table_queue: Queue | None = None,
 ) -> tuple[object, object]:
@@ -186,16 +192,17 @@ def train(
     if total_gens is None:
         total_gens = max(500, total_timesteps // (N_POP * steps_per_gen))
 
-    n_w = n_params()
+    network_params_amount = n_params()
     print(
         f"[train] Genetic DQN  {N_POP} workers x {steps_per_gen} steps/gen x {total_gens} gens"
         f"  ~ {N_POP * steps_per_gen * total_gens:,} total env-steps"
-        f"  network params={n_w:,}  actions={N_ACTIONS}"
+        f"  network params={network_params_amount:,}  actions={N_ACTIONS}"
     )
+    print(f"[train] multi_start_eval={multi_start_eval}  use_crossover={use_crossover}")
 
-    # ── Population initialisieren / fortsetzen ───────────────────────────────
+    # Population initialisieren/fortsetzen
     population, start_gen, best_ever_fitness = _init_population(
-        resume, save_path, n_w)
+        resume, save_path, network_params_amount)
     best_ever_weight_vector: np.ndarray = population[0].copy()
 
     hall_of_fame: list[tuple[float, np.ndarray]] = []
@@ -216,7 +223,7 @@ def train(
             target=run_population_display,
             args=(pop_holder, stop_event, track, render_queue),
             kwargs=dict(
-                build_policy=neural_net_from_weights,   # Gewichtsvektor → fertiges Netz
+                build_policy=neural_net_from_weights,   # Gewichtsvektor -> fertiges Netz
                 choose_action=act,
                 inspect_trace_fn=forward_trace,
                 use_rays=use_rays,
@@ -250,7 +257,8 @@ def train(
 
             # 1. Ganze Population auswerten (je ein DDQN-Worker), best first.
             fitnesses, weights_out, ghost_positions = _evaluate_population(
-                executor, population, track, steps_per_gen, epsilon, eval_steps, use_rays)
+                executor, population, track, steps_per_gen, epsilon, eval_steps,
+                use_rays, multi_start_eval)
 
             # 2. Allzeit-Besten über die Hall of Fame verfolgen.
             update_hall_of_fame(hall_of_fame, fitnesses, weights_out,
@@ -277,7 +285,8 @@ def train(
             # 5. Nächste Generation aus den Ergebnissen dieser züchten.
             population = _breed_next_generation(
                 weights_out,
-                hall_of_fame, best_ever_weight_vector, stagnation_count, stagnation_boost)
+                hall_of_fame, best_ever_weight_vector, stagnation_count, stagnation_boost,
+                use_crossover=use_crossover)
 
             # 6. Stats melden + Checkpoint ─────────────────────────────────
             update_top_scores(top_scores, fitnesses[0], gen)

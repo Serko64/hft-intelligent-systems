@@ -1,13 +1,15 @@
 import numpy as np
 
 from f1_rl.config import (
-    BATCH_SIZE, BATCH_SIZE_GPU, GAMMA, GRAD_CLIP, LR, N_ACTIONS, N_OBS,
-    REPLAY_CAPACITY, TARGET_UPDATE_FREQ, TRAIN_FREQ,
+    BATCH_SIZE, BATCH_SIZE_GPU, EVAL_START_POSITIONS, GAMMA, GRAD_CLIP, LR,
+    N_ACTIONS, N_OBS, REPLAY_CAPACITY, TARGET_UPDATE_FREQ, TRAIN_FREQ,
 )
 
 
 def run_worker(args: tuple) -> tuple[float, np.ndarray, float, float]:
-    inherited_weights, track, n_steps, epsilon, eval_steps, use_rays = args
+    # multi_start ist optional, damit alte Aufrufer ohne das Flag gültig bleiben.
+    inherited_weights, track, n_steps, epsilon, eval_steps, use_rays = args[:6]
+    multi_start = bool(args[6]) if len(args) > 6 else False
 
     # ── Aufgeschobene Imports (spawn-sicher auf Windows) ──────────────────
     import copy
@@ -125,19 +127,33 @@ def run_worker(args: tuple) -> tuple[float, np.ndarray, float, float]:
     # weit der Agent kommt, vergleichbar mit der Live-Anzeige. eval_steps ist an
     # die Streckenlänge budgetiert, damit eine volle Runde (und ihr Ziel-Bonus)
     # erreichbar ist; die Schleife bricht bei Crash/Runde trotzdem früh ab.
-    eval_reward = 0.0
-    obs = reset_env(env)
     online_net.eval()
-    for _ in range(eval_steps):
-        with torch.no_grad():
-            action = int(online_net(torch.from_numpy(obs).to(
-                device).unsqueeze(0)).argmax().item())
-        obs, reward, terminated, truncated, _ = step_env(env, action)
-        eval_reward += reward
-        if terminated or truncated:
-            break
+
+    def greedy_episode(start_progress: float) -> float:
+        total_reward = 0.0
+        obs = reset_env(env, start_progress)
+        for _ in range(eval_steps):
+            with torch.no_grad():
+                action = int(online_net(torch.from_numpy(obs).to(
+                    device).unsqueeze(0)).argmax().item())
+            obs, reward, terminated, truncated, _ = step_env(env, action)
+            total_reward += reward
+            if terminated or truncated:
+                break
+        return total_reward
+
+    # Standard-Start (am Start/Ziel) zählt immer — auch als Geister-/Endposition.
+    eval_reward = greedy_episode(0.0)
     crash_x = env["x_m"]
     crash_y = env["y_m"]
+
+    # Multi-Start: zusätzlich von gleichmäßig verteilten Punkten starten und mitteln.
+    if multi_start and EVAL_START_POSITIONS > 1:
+        track_length = track["total_length_m"]
+        rewards = [eval_reward]
+        for k in range(1, EVAL_START_POSITIONS):
+            rewards.append(greedy_episode(k / EVAL_START_POSITIONS * track_length))
+        eval_reward = float(np.mean(rewards))
 
     # Aktualisierte Gewichte als flaches numpy-Array zurück (darauf arbeitet der GA).
     return eval_reward, network_to_flat(online_net), crash_x, crash_y

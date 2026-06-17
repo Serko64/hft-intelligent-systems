@@ -103,6 +103,8 @@ export type ClientMsg =
       resume: boolean
       use_rays: boolean
       auto_speed: boolean
+      multi_start_eval: boolean
+      use_crossover: boolean
     }
   | { type: "load_and_drive"; circuit: string; use_rays: boolean; backend: "dqn" | "qtable" }
   | { type: "set_speed"; value: number }

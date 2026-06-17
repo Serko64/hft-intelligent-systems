@@ -58,6 +58,10 @@ EVAL_STEPS = 2_000
 EVAL_AVG_SPEED_MS = 25.0   # assumed avg lap speed when budgeting eval steps
 EVAL_STEP_BUFFER = 1.35   # safety margin on the lap-length estimate
 EVAL_STEP_CAP = 15_000  # hard upper bound so eval never runs away
+# Multi-Start-Eval (optional, per Frontend-Schalter): statt nur am Start/Ziel wird
+# der Eval-Score über mehrere, gleichmäßig auf der Centerline verteilte Startpunkte
+# gemittelt — robusteres Fitness-Signal, das nicht auf "Strecke ab Start" überanpasst.
+EVAL_START_POSITIONS = 4   # Anzahl Startpunkte bei aktivem Multi-Start-Eval
 STAGNATION_GENS = 15
 MUTATION_RATE = 0.02    # fraction of weights perturbed per offspring
 MUTATION_NOISE = 0.10    # std of Gaussian noise added during mutation

@@ -36,6 +36,8 @@ export function ControlPanel({
   const [gensIdx, setGensIdx] = useState(5) // 200
   const [qtable, setQtable] = useState(false) // tabular Q-learning instead of the DQN
   const [useRays, setUseRays] = useState(true)
+  const [multiStart, setMultiStart] = useState(false) // Eval von mehreren Startpunkten mitteln
+  const [useCrossover, setUseCrossover] = useState(true) // GA-Crossover an/aus (sonst reine Mutation)
   const [speed, setSpeed] = useState(3) // live-view sub-steps per frame (matches SIM_SPEED_DEFAULT)
   const [autoSpeed, setAutoSpeed] = useState(true) // sync animation to generation compute time
   const [driveBackend, setDriveBackend] = useState<"dqn" | "qtable">("dqn") // welches Modell „Laden & Fahren" lädt
@@ -70,6 +72,8 @@ export function ControlPanel({
       resume,
       use_rays: useRays,
       auto_speed: autoSpeed,
+      multi_start_eval: multiStart,
+      use_crossover: useCrossover,
     })
 
   return (
@@ -189,6 +193,32 @@ export function ControlPanel({
           <Checkbox id="rays" checked={useRays} onCheckedChange={(v) => setUseRays(Boolean(v))} />
           <Label htmlFor="rays" className="cursor-pointer">
             Sensor-Strahlen (Rays) nutzen
+          </Label>
+        </div>
+
+        {/* Multi-start eval: average fitness over several start positions (DQN only) */}
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="multistart"
+            checked={multiStart}
+            disabled={qtable}
+            onCheckedChange={(v) => setMultiStart(Boolean(v))}
+          />
+          <Label htmlFor="multistart" className={`cursor-pointer ${qtable ? "text-muted-foreground/50" : ""}`}>
+            Multi-Start-Eval (robustere Fitness)
+          </Label>
+        </div>
+
+        {/* Genetic crossover on/off — off = pure mutation (ES-style) (DQN only) */}
+        <div className="flex items-center gap-2">
+          <Checkbox
+            id="crossover"
+            checked={useCrossover}
+            disabled={qtable}
+            onCheckedChange={(v) => setUseCrossover(Boolean(v))}
+          />
+          <Label htmlFor="crossover" className={`cursor-pointer ${qtable ? "text-muted-foreground/50" : ""}`}>
+            Crossover nutzen (aus = nur Mutation)
           </Label>
         </div>
 

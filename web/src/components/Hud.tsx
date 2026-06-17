@@ -49,7 +49,7 @@ function HudImpl({ carsRef, stats }: Props) {
           </>
         )}
 
-        {stats && stats.top_scores.length > 0 && (
+        {stats && stats.top_scores && stats.top_scores.length > 0 && (
           <div className="mt-2">
             <div className="h-px bg-border my-1" />
             <div className="mb-1 text-xs font-semibold text-muted-foreground">Top 10</div>

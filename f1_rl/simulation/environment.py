@@ -168,15 +168,26 @@ def create_car_env(track: Track, use_rays: bool = True) -> CarEnv:
     }
 
 
-def reset_env(env: CarEnv) -> np.ndarray:
-    coords = list(env["track"]["centerline_m"].coords)
-    env["x_m"], env["y_m"] = coords[0]
-    dx = coords[1][0] - coords[0][0]
-    dy = coords[1][1] - coords[0][1]
-    env["heading"] = math.atan2(dy, dx)
+def reset_env(env: CarEnv, start_progress: float = 0.0) -> np.ndarray:
+    centerline = env["track"]["centerline_m"]
+    total = env["track"]["total_length_m"]
+    # start_progress = 0 -> klassischer Start an der Start/Ziel-Linie. Ein positiver
+    # Wert setzt das Auto an die entsprechende Stelle der Centerline (für Multi-Start-Eval).
+    start_progress = start_progress % total if total > 0 else 0.0
+    if start_progress <= 0.0:
+        coords = list(centerline.coords)
+        env["x_m"], env["y_m"] = coords[0]
+        dx = coords[1][0] - coords[0][0]
+        dy = coords[1][1] - coords[0][1]
+        env["heading"] = math.atan2(dy, dx)
+    else:
+        here = centerline.interpolate(start_progress)
+        ahead = centerline.interpolate(min(total, start_progress + 0.5))
+        env["x_m"], env["y_m"] = here.x, here.y
+        env["heading"] = math.atan2(ahead.y - here.y, ahead.x - here.x)
     env["speed_ms"] = DEFAULT_SPEED_MS
-    env["progress"] = 0.0
-    env["prev_progress"] = 0.0
+    env["progress"] = start_progress
+    env["prev_progress"] = start_progress
     env["progress_delta"] = 0.0
     env["lap_forward"] = False
     env["lap_count"] = 0
@@ -189,7 +200,10 @@ def reset_env(env: CarEnv) -> np.ndarray:
     env["a_lat"] = 0.0
     env["lateral_offset_m"] = 0.0
     env["track_heading"] = 0.0
-    env["checkpoint_idx"] = 0
+    # Checkpoint-Index zum Startpunkt passend setzen, sonst gäbe es beim ersten Schritt
+    # Bonus-Gutschriften für Tore, die das Auto gar nicht durchfahren hat.
+    env["checkpoint_idx"] = (
+        int(start_progress / total * N_CHECKPOINTS) if total > 0 else 0)
     env["episode_reward"] = 0.0
     env["reward_parts"] = {part: 0.0 for part in REWARD_PARTS}
     env["last_reward_parts"] = dict(env["reward_parts"])

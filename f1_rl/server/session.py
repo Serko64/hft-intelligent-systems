@@ -78,9 +78,10 @@ def _load_session_track(circuit: str) -> Track:
 
 def start_training(circuit: str, steps_per_gen: int, total_gens: int,
                    evolution_mode: str, resume: bool, use_rays: bool = True,
-                   auto_speed: bool = False) -> None:
+                   auto_speed: bool = False, multi_start_eval: bool = False,
+                   use_crossover: bool = True) -> None:
     stop_session()
-    # Frisches Event für DIESEN Lauf — das alte beendet den vorherigen Lauf.
+
     SESSION["stop_event"] = threading.Event()
     SESSION["track"] = _load_session_track(circuit)
     SESSION["render_q"] = queue.Queue(maxsize=4)
@@ -93,11 +94,14 @@ def start_training(circuit: str, steps_per_gen: int, total_gens: int,
     cancel_event = SESSION["stop_event"]
 
     def run():
-        # Beide Backends haben dieselbe Signatur, der Aufruf ist identisch.
         if is_qtable:
             from f1_rl.learning.qtable import q_learning_loop as train
+            # DQN-spezifische Schalter ans Q-Table-Backend nicht weiterreichen.
+            extra: dict = {}
         else:
             from f1_rl.learning.trainer import train
+            extra = dict(multi_start_eval=multi_start_eval,
+                         use_crossover=use_crossover)
         try:
             train(track=SESSION["track"], render_queue=SESSION["render_q"],
                   stats_queue=SESSION["stats_q"], line_queue=SESSION["line_q"],
@@ -108,7 +112,7 @@ def start_training(circuit: str, steps_per_gen: int, total_gens: int,
                   steps_per_gen=steps_per_gen, total_gens=total_gens,
                   resume=resume,
                   use_rays=use_rays, cancel_event=cancel_event,
-                  table_queue=SESSION["table_q"])
+                  table_queue=SESSION["table_q"], **extra)
         except Exception as e:               # noqa: BLE001
             print(f"[server] training error: {e}")
         finally:

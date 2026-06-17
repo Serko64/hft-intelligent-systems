@@ -28,6 +28,8 @@ class Api:
             bool(cfg.get("resume", False)),
             use_rays=bool(cfg.get("use_rays", True)),
             auto_speed=bool(cfg.get("auto_speed", False)),
+            multi_start_eval=bool(cfg.get("multi_start_eval", False)),
+            use_crossover=bool(cfg.get("use_crossover", True)),
         )
         return track_to_dict(SESSION["track"])
 
