@@ -1,4 +1,3 @@
-gymnasium>=0.29.1,<1.3.0
 pygame>=2.6.1
 stable-baselines3[extra]>=2.8.0
 shapely>=2.0.6
@@ -7,3 +6,4 @@ pyproj>=3.7.0
 torch>=2.3.0
 numpy>=1.26.0
 tensorboard>=2.20.0
+pywebview>=5.4

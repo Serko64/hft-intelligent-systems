@@ -1,0 +1,10 @@
+{
+  "backend": "qtable",
+  "timesteps_done": 24960000,
+  "total_timesteps": 24960000,
+  "circuit": "Autodromo Enzo e Dino Ferrari",
+  "epsilon": 0.05,
+  "generation": 199,
+  "best_fitness": 14091.157074392266,
+  "n_states": 261
+}
