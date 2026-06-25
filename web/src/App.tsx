@@ -15,18 +15,18 @@ export default function App() {
   const { connected, status, statusMessage, track, stats, statsHistory, racingLine, inspect, qtable, carsRef, send } =
     useSimBridge()
 
-  // Colour cars by rank (best→worst) or by their evolution generation.
+  // Autos nach Rang einfärben (bester bis schlechtester) oder nach ihrer Generation.
   const [colorMode, setColorMode] = useState<ColorMode>("rank")
   const [showCharts, setShowCharts] = useState(true)
   const [selectedCar, setSelectedCar] = useState<number | null>(null)
 
-  // Tell the backend which car to stream net/Q-value detail for.
+  // Dem Backend sagen, für welches Auto es Netz- und Q-Wert-Details streamen soll.
   useEffect(() => {
     send({ type: "inspect_car", index: selectedCar })
   }, [selectedCar, send])
 
-  // Preview the selected circuit before training starts. The live WS track
-  // (sent when training/driving begins) takes precedence over the preview.
+  // Vorschau der gewählten Strecke, bevor das Training startet. Die Live-Strecke
+  // (kommt mit Trainings- oder Fahrstart) hat Vorrang vor der Vorschau.
   const [preview, setPreview] = useState<TrackMsg | null>(null)
   const onCircuitChange = useCallback((name: string) => {
     api()
@@ -59,7 +59,7 @@ export default function App() {
           onSelectCar={setSelectedCar}
         />
 
-        {/* Chart overlays — pointer-events only on the cards so orbiting still works. */}
+        {/* Chart-Overlays: pointer-events nur auf den Karten, damit das Drehen weiter funktioniert. */}
         {showCharts && (
           <div className="pointer-events-none absolute inset-0 p-2">
             {statsHistory.length >= 2 && (

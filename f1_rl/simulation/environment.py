@@ -18,7 +18,7 @@ DT = 1.0 / 60.0
 GRIP_ENABLED = True
 GRIP_MAX = 45.0          # maximale Gesamtbeschleunigung, m/s² (~4.6 g)
 
-# Auto-Abmessungen (Meter) — für Kollisionen ist das Auto ein Rechteck.
+# Auto-Abmessungen (Meter), für Kollisionen ist das Auto ein Rechteck.
 CAR_LENGTH_M = 5.0
 CAR_WIDTH_M = 2.0
 
@@ -53,7 +53,7 @@ RAY_ANGLES = tuple(math.radians(a) for a in (-75, -45, -20, 0, 20, 45, 75))
 _RAY_ANGLES_ARR = np.asarray(RAY_ANGLES, dtype=np.float64)
 MAX_RAY_M = 80.0
 
-# Ohne Rays sieht die Policy konstante Werte — die Beobachtung bleibt 14 breit.
+# Ohne Rays sieht die Policy konstante Werte, die Beobachtung bleibt aber 14 breit.
 _NO_RAYS = (1.0,) * len(RAY_ANGLES)
 
 
@@ -75,14 +75,14 @@ class CarFrame(TypedDict):
 
 
 class CarEnv(TypedDict):
-    # — konstant nach create_car_env() —
+    # konstant nach create_car_env()
     track: Track
     use_rays: bool
     wall_start: np.ndarray        # (K, 2) Anfangspunkte der Wand-Segmente
     wall_end: np.ndarray          # (K, 2) Endpunkte
     wall_mid: np.ndarray          # (K, 2) Mittelpunkte
     wall_cull_radius: np.ndarray  # (K,) max. Treffer-Distanz pro Segment
-    # — veränderlich pro Schritt —
+    # veränderlich pro Schritt
     x_m: float
     y_m: float
     heading: float

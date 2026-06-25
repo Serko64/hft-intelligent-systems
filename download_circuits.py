@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Einmaliges Hilfsskript: lädt die GeoJSON-Streckendateien aus dem öffentlichen
+# bacinger/f1-circuits-Repo nach circuits/ herunter. Schon vorhandene Dateien werden
+# übersprungen, das Skript kann also gefahrlos erneut laufen.
 import os
 import urllib.request
 import json

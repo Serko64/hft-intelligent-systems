@@ -34,12 +34,12 @@ export function ControlPanel({
   const [circuit, setCircuit] = useState<string>("")
   const [stepsIdx, setStepsIdx] = useState(4) // 5000
   const [gensIdx, setGensIdx] = useState(5) // 200
-  const [qtable, setQtable] = useState(false) // tabular Q-learning instead of the DQN
+  const [qtable, setQtable] = useState(false) // tabellarisches Q-Learning statt DQN
   const [useRays, setUseRays] = useState(true)
   const [multiStart, setMultiStart] = useState(false) // Eval von mehreren Startpunkten mitteln
   const [useCrossover, setUseCrossover] = useState(true) // GA-Crossover an/aus (sonst reine Mutation)
-  const [speed, setSpeed] = useState(3) // live-view sub-steps per frame (matches SIM_SPEED_DEFAULT)
-  const [autoSpeed, setAutoSpeed] = useState(true) // sync animation to generation compute time
+  const [speed, setSpeed] = useState(3) // Sim-Teilschritte je Bild (passt zu SIM_SPEED_DEFAULT)
+  const [autoSpeed, setAutoSpeed] = useState(true) // Animation an die Rechenzeit je Generation koppeln
   const [driveBackend, setDriveBackend] = useState<"dqn" | "qtable">("dqn") // welches Modell „Laden & Fahren" lädt
 
   const selectCircuit = (name: string) => {
@@ -92,7 +92,7 @@ export function ControlPanel({
       </CardHeader>
 
       <CardContent className="space-y-5">
-        {/* Circuit */}
+        {/* Strecke */}
         <div className="space-y-2">
           <Label>Strecke</Label>
           <Select value={circuit} onValueChange={selectCircuit}>
@@ -109,7 +109,7 @@ export function ControlPanel({
           </Select>
         </div>
 
-        {/* Steps / generations */}
+        {/* Steps und Generationen */}
         <div className="space-y-2">
           <Label className="flex justify-between">
             <span>Steps / Generation</span>
@@ -137,7 +137,7 @@ export function ControlPanel({
           />
         </div>
 
-        {/* Auto speed: sync the animation to how long a generation takes to compute */}
+        {/* Auto-Geschwindigkeit: Animation an die Rechenzeit einer Generation koppeln */}
         <div className="flex items-center gap-2">
           <Checkbox id="autospeed" checked={autoSpeed} onCheckedChange={(v) => setAutoSpeed(Boolean(v))} />
           <Label htmlFor="autospeed" className="cursor-pointer">
@@ -145,7 +145,7 @@ export function ControlPanel({
           </Label>
         </div>
 
-        {/* Live-view speed (sub-steps per frame) — manual, disabled while auto is on */}
+        {/* Live-Geschwindigkeit (Teilschritte je Bild), manuell, gesperrt solange Auto an ist */}
         <div className="space-y-2">
           <Label className="flex justify-between">
             <span className={autoSpeed ? "text-muted-foreground/50" : ""}>Geschwindigkeit (live)</span>
@@ -164,7 +164,7 @@ export function ControlPanel({
           />
         </div>
 
-        {/* Colour cars by generation instead of rank */}
+        {/* Autos nach Generation statt nach Rang einfärben */}
         <div className="flex items-center gap-2">
           <Checkbox id="colorgen" checked={colorByGen} onCheckedChange={(v) => onColorByGenChange(Boolean(v))} />
           <Label htmlFor="colorgen" className="cursor-pointer">
@@ -172,7 +172,7 @@ export function ControlPanel({
           </Label>
         </div>
 
-        {/* Show / hide the chart overlays */}
+        {/* Chart-Overlays ein- oder ausblenden */}
         <div className="flex items-center gap-2">
           <Checkbox id="charts" checked={showCharts} onCheckedChange={(v) => onShowChartsChange(Boolean(v))} />
           <Label htmlFor="charts" className="cursor-pointer">
@@ -180,7 +180,7 @@ export function ControlPanel({
           </Label>
         </div>
 
-        {/* Q-table backend: classic tabular Q-learning, no neural network */}
+        {/* Q-Table-Backend: klassisches tabellarisches Q-Learning, kein neuronales Netz */}
         <div className="flex items-center gap-2">
           <Checkbox id="qtable" checked={qtable} onCheckedChange={(v) => setQtable(Boolean(v))} />
           <Label htmlFor="qtable" className="cursor-pointer">
@@ -188,7 +188,7 @@ export function ControlPanel({
           </Label>
         </div>
 
-        {/* Sensor rays */}
+        {/* Sensor-Strahlen */}
         <div className="flex items-center gap-2">
           <Checkbox id="rays" checked={useRays} onCheckedChange={(v) => setUseRays(Boolean(v))} />
           <Label htmlFor="rays" className="cursor-pointer">
@@ -196,7 +196,7 @@ export function ControlPanel({
           </Label>
         </div>
 
-        {/* Multi-start eval: average fitness over several start positions (DQN only) */}
+        {/* Multi-Start-Eval: Fitness über mehrere Startpunkte mitteln (nur DQN) */}
         <div className="flex items-center gap-2">
           <Checkbox
             id="multistart"
@@ -209,7 +209,7 @@ export function ControlPanel({
           </Label>
         </div>
 
-        {/* Genetic crossover on/off — off = pure mutation (ES-style) (DQN only) */}
+        {/* Genetisches Crossover an/aus, aus = reine Mutation (ES-Stil), nur DQN */}
         <div className="flex items-center gap-2">
           <Checkbox
             id="crossover"
@@ -238,7 +238,7 @@ export function ControlPanel({
           </Select>
         </div>
 
-        {/* Actions */}
+        {/* Aktionen */}
         <div className="grid grid-cols-2 gap-2">
           <Button className="col-span-2" disabled={!connected || !circuit} onClick={() => startTraining(false)}>
             ▶ Training starten

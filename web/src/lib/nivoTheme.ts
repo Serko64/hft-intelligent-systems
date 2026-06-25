@@ -1,4 +1,4 @@
-// Shared dark theme for all nivo charts so they blend into the dark UI.
+// Gemeinsames Dark-Theme für alle nivo-Charts, damit sie sich ins dunkle UI einfügen.
 import type { PartialTheme } from "@nivo/theming"
 
 export const nivoDark: PartialTheme = {

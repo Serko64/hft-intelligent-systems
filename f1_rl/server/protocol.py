@@ -2,7 +2,7 @@ from f1_rl.simulation.environment import REWARD_PARTS, CarFrame
 
 # Streckenrand-Bänder, von der Fahrbahnkante nach AUSSEN gemessen, in Metern.
 # Bewusst SCHMAL: große Auslauf-Puffer (15 m) verschmelzen über Geraden und füllen
-# auf kompakten Strecken das Infield — sieht nach Klecksen statt Strecke aus. Ein
+# auf kompakten Strecken das Infield, das sieht nach Klecksen statt Strecke aus. Ein
 # schmaler roter Randstein + ein schmaler Asphaltstreifen liest sich als saubere Kante.
 _TRACK_ZONES = [
     ("runoff", 4.0),
@@ -98,6 +98,6 @@ def stats_to_dict(stats: dict) -> dict:
         "epsilon": float(stats.get("epsilon", 1.0)),
         "best_fitness": float(stats.get("best_fitness", 0.0)),
         "mean_fitness": float(stats.get("mean_fitness", 0.0)),
-        # Scoreboard: [score, generation], best first — das Frontend-HUD erwartet das Feld.
+        # Scoreboard: [Score, Generation], best first. Das Frontend-HUD erwartet dieses Feld.
         "top_scores": [[float(s), int(g)] for s, g in stats.get("top_scores", [])],
     }

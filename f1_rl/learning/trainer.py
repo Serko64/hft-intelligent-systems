@@ -73,7 +73,7 @@ def _init_population(resume: bool, save_path: str, amount_of_weights: int) -> tu
                 f"[train] Resumed gen={start_gen}  best_fitness={best_ever_fitness:.1f}")
             return population, start_gen, best_ever_fitness
         print(f"[train] Incompatible checkpoint (shape {loaded.shape}, "
-              f"expected ({amount_of_weights},)) — starting fresh")
+              f"expected ({amount_of_weights},)), starting fresh")
 
     return [random_weights() for _ in range(N_POP)], 0, -1e9
 
@@ -249,7 +249,7 @@ def train(
         for gen in range(start_gen, start_gen + total_gens):
 
             if cancel_event is not None and cancel_event.is_set():
-                print(f"[train] Stop requested — ending at generation {gen}")
+                print(f"[train] Stop requested, ending at generation {gen}")
                 break
 
             gen_start_time = time.perf_counter()
@@ -336,7 +336,7 @@ def train(
     np.save(save_path, best_ever_weight_vector)
     _write_state(track["name"], total_timesteps, total_timesteps,
                  EPSILON_MIN, start_gen + total_gens - 1, best_ever_fitness)
-    print(f"[train] Done. Best weights → {save_path}")
+    print(f"[train] Done. Best weights saved to {save_path}")
     return neural_net_from_weights(best_ever_weight_vector), track
 
 

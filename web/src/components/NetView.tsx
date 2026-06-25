@@ -8,7 +8,7 @@ const OBS_LABELS = [
   "r-75", "r-45", "r-20", "r0", "r+20", "r+45", "r+75",
 ]
 
-/** Diverging colour: negative → blue, ~0 → grey, positive → red. */
+/** Divergierende Farbe: negativ blau, um 0 grau, positiv rot. */
 function diverging(v: number, scale: number): string {
   const t = Math.max(-1, Math.min(1, v / (scale || 1)))
   if (t >= 0) {
@@ -19,7 +19,7 @@ function diverging(v: number, scale: number): string {
   return `rgb(${Math.round(120 - 70 * a)},${Math.round(120 - 20 * a)},${Math.round(120 + 135 * a)})`
 }
 
-/** Magnitude colour for ReLU activations (≥0): dark slate → bright cyan. */
+/** Betragsfarbe für ReLU-Aktivierungen (≥0): von dunklem Schiefer zu hellem Cyan. */
 function magnitude(v: number, max: number): string {
   const t = Math.max(0, Math.min(1, v / (max || 1)))
   return `rgb(${Math.round(20 + 36 * t)},${Math.round(30 + 178 * t)},${Math.round(40 + 195 * t)})`
@@ -29,7 +29,7 @@ function maxAbs(a: number[]): number {
   return a.reduce((m, v) => Math.max(m, Math.abs(v)), 1e-6)
 }
 
-/** A row of cells (one per neuron) coloured by activation value. */
+/** Eine Reihe Zellen (eine je Neuron), eingefärbt nach dem Aktivierungswert. */
 function Layer({ title, values, color, labels, highlight }: {
   title: string
   values: number[]
@@ -71,7 +71,7 @@ function Layer({ title, values, color, labels, highlight }: {
   )
 }
 
-/** Activation map of the whole network for the inspected car's current state. */
+/** Aktivierungskarte des ganzen Netzes für den aktuellen Zustand des inspizierten Autos. */
 export function NetView({ insp }: { insp: InspectMsg }) {
   const obsScale = maxAbs(insp.obs)
   const qScale = maxAbs(insp.q)
@@ -98,7 +98,7 @@ export function NetView({ insp }: { insp: InspectMsg }) {
   )
 }
 
-/** Q-values as a bar chart; the chosen (greedy) action is highlighted. */
+/** Q-Werte als Balkendiagramm, die gewählte (greedy) Aktion ist hervorgehoben. */
 export function QValueChart({ insp }: { insp: InspectMsg }) {
   const data = insp.q.map((v, i) => ({ action: String(i), q: +v.toFixed(2) }))
   return (

@@ -24,7 +24,7 @@ def record_greedy_replay(policy, choose_action, track, max_steps: int,
 def emit_racing_line(line_queue, frames: np.ndarray | None) -> None:
     if line_queue is None or frames is None or len(frames) == 0:
         return
-    # Frame-Zeile ist (x, y, heading, speed, throttle, progress) — wir brauchen 4 davon.
+    # Frame-Zeile ist (x, y, heading, speed, throttle, progress), wir brauchen 4 davon.
     line = [(float(f[0]), float(f[1]), float(f[3]), float(f[4]))
             for f in frames]
     put_latest(line_queue, line)

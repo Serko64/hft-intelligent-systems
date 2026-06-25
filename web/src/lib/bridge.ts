@@ -1,6 +1,6 @@
-// Direkte BRücke zum Python-Backend (pywebview). Ersetzt den alten WebSocket:
+// Direkte Brücke zum Python-Backend (pywebview). Ersetzt den alten WebSocket:
 // JS ruft Python-Methoden über window.pywebview.api.* auf und zieht die Frames
-// per poll(). Kein Server, kein Netzwerk — alles ein Prozess.
+// per poll(). Kein Server, kein Netzwerk, alles läuft in einem Prozess.
 
 import type { Car, InspectMsg, QTableMsg, RacingLineMsg, StatsMsg, TrackMsg } from "./types"
 

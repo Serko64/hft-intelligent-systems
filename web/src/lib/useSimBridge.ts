@@ -3,13 +3,13 @@ import type { Car, ClientMsg, InspectMsg, QTableMsg, RacingLineMsg, StatsMsg, Tr
 import { api } from "./bridge"
 
 /**
- * Verbindet das UI mit dem Python-Backend über die pywebview-Bridge — der
+ * Verbindet das UI mit dem Python-Backend über die pywebview-Bridge, den
  * Ersatz für useSimSocket (WebSocket). Gleiche Rückgabe-Signatur, damit App.tsx
  * und alle Komponenten unverändert bleiben.
  *
- * Frames kommen ~60×/s per poll(). Bei jedem Frame React neu zu rendern wäre
- * viel zu teuer, deshalb landet das aktuelle Auto-Array in einem *ref*
- * (`carsRef`), das die three.js-Renderschleife direkt liest. Nur
+ * Frames kommen ~60-mal pro Sekunde per poll(). Bei jedem Frame React neu zu
+ * rendern wäre viel zu teuer, deshalb landet das aktuelle Auto-Array in einem
+ * *ref* (`carsRef`), das die three.js-Renderschleife direkt liest. Nur
  * niederfrequente Daten (Status, Strecke, Statistik) liegen in React-State.
  */
 export function useSimBridge() {
@@ -57,8 +57,8 @@ export function useSimBridge() {
         if (msg.status !== statusRef.current) {
           statusRef.current = msg.status
           setStatus(msg.status)
-          // Nichts läuft -> Autos leeren, damit die Szene nicht auf dem letzten
-          // Frame einfriert (nach Stopp / Trainingsende).
+          // Nichts läuft, also Autos leeren, damit die Szene nicht auf dem letzten
+          // Frame einfriert (nach Stopp oder Trainingsende).
           if (msg.status === "idle") {
             carsRef.current = []
             setInspect(null)
@@ -66,7 +66,7 @@ export function useSimBridge() {
           }
         }
       } catch {
-        // Ein verworfener Poll ist harmlos — beim nächsten Tick erneut versuchen.
+        // Ein verworfener Poll ist harmlos, beim nächsten Tick wird erneut versucht.
       }
       timer = setTimeout(() => loop(a), 1000 / 60)
     }
@@ -89,7 +89,7 @@ export function useSimBridge() {
           const t = await a.start_training(cmd)
           if (t && !t.error) {
             setTrack({ type: "track", ...t })
-            setRacingLine(null) // neue Strecke -> alte Racing-Line + Historie ungültig
+            setRacingLine(null) // neue Strecke, alte Racing-Line und Historie ungültig
             setStatsHistory([])
             setStatusMessage(undefined)
           }

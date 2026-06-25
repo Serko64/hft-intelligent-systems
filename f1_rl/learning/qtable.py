@@ -93,7 +93,7 @@ def temporal_difference_update(table: QTable, state: tuple[int, ...], action,
                                done: bool):
     # Q(s,a) = Q(s,a) + α · [ r + γ · maxₐ′ Q(s′,a′) − Q(s,a) ]
     if done:
-        target = reward  # Episode vorbei → kein zukünftiger Wert mehr
+        target = reward  # Episode vorbei, also kein zukünftiger Wert mehr
     else:
         best_next_value = float(np.max(q_row(table, next_state)))
         target = reward + GAMMA * best_next_value
@@ -130,7 +130,7 @@ def policy_action(table: QTable, obs) -> int:
 
 def inspect_trace(table: QTable, obs) -> tuple[np.ndarray, list[np.ndarray]]:
     state = bin_values_for_qtable(obs)
-    # nur lesen — Inspect darf nicht „lernen"
+    # nur lesen, Inspect darf nicht „lernen"
     q = q_row_readonly(table, state).copy()
     hidden = [np.asarray(state, dtype=np.float32)]
     return q, hidden
@@ -142,8 +142,8 @@ def _copy_table(table: QTable) -> QTable:
     return {state: row.copy() for state, row in table.items()}
 
 
-# Invariante: eine fertige Tabelle wird NIE mehr in place verändert — deshalb
-# dürfen Crossover/Mutation unveränderte Q-Zeilen referenzieren (copy-on-write).
+# Invariante: eine fertige Tabelle wird NIE mehr in place verändert, deshalb
+# dürfen Crossover und Mutation unveränderte Q-Zeilen referenzieren (copy-on-write).
 
 def crossover_tables_biased(table_a: QTable, table_b: QTable,
                             score_a, score_b) -> QTable:
@@ -156,7 +156,7 @@ def crossover_tables_biased(table_a: QTable, table_b: QTable,
     child: QTable = {}
 
     # Pro Zustand entscheidet der Zufall, von welchem Elternteil die Q-Zeile
-    # kommt — der bessere gewinnt öfter.
+    # kommt, der bessere gewinnt öfter.
     for state in set(table_a) | set(table_b):
         row_a, row_b = table_a.get(state), table_b.get(state)
         if row_a is None:
@@ -234,7 +234,7 @@ def _keep_table_reference(table: QTable) -> QTable:
     return table
 
 
-TABLE_MAX_ROWS = 400   # mehr Zeilen als Canvas-Pixel bringen nichts → downsamplen
+TABLE_MAX_ROWS = 400   # mehr Zeilen als Canvas-Pixel bringen nichts, also downsamplen
 
 
 def _table_heatmap_payload(table: QTable, selected_car):
@@ -416,7 +416,7 @@ def q_learning_loop(
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
         for gen in range(start_gen, start_gen + total_gens):
             if cancel_event is not None and cancel_event.is_set():
-                print(f"[qtable] Stop requested — ending at generation {gen}")
+                print(f"[qtable] Stop requested, ending at generation {gen}")
                 break
 
             gen_start_time = time.perf_counter()
@@ -450,7 +450,7 @@ def q_learning_loop(
                 # Referenz (wird nur read-only genutzt)
                 best_ever_table = hall_of_fame[0][1]
                 # Replay ist ein langer pure-Python-Lauf (hält das GIL). Bei den schnellen
-                # Tabellen-Generationen kommen neue Bestwerte im Sekundentakt → höchstens
+                # Tabellen-Generationen kommen neue Bestwerte im Sekundentakt, deshalb höchstens
                 # alle 2 s neu aufzeichnen, sonst hungert die Event-Loop (ruckelndes UI).
                 now = time.perf_counter()
                 if now - last_line_t > 2.0:
@@ -463,7 +463,7 @@ def q_learning_loop(
             gen_holder[0] = gen
             pop_holder[0] = list(tables_out)
 
-            # 4. Stagnation → Mutation hochregeln.
+            # 4. Bei Stagnation die Mutation hochregeln.
             prev_best_eval, stagnation_count, stagnation_boost = update_stagnation(
                 prev_best_eval, stagnation_count, fitnesses[0])
 

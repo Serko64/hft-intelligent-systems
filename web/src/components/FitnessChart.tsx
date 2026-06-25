@@ -6,7 +6,7 @@ interface Props {
   history: StatsMsg[]
 }
 
-/** Performance over the evolution: best & mean fitness per generation (zoomable). */
+/** Performance über die Evolution: beste und mittlere Fitness je Generation (zoombar). */
 export function FitnessChart({ history }: Props) {
   if (history.length < 2) {
     return <p className="text-xs text-muted-foreground">Warte auf Generationen…</p>

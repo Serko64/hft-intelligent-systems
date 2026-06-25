@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import type { Car, ClientMsg, InspectMsg, QTableMsg, RacingLineMsg, ServerMsg, StatsMsg, TrackMsg } from "./types"
 
 /**
- * Manages the WebSocket connection to the backend.
+ * Verwaltet die WebSocket-Verbindung zum Backend. Inzwischen durch useSimBridge
+ * (pywebview) abgelöst, hier nur noch als Referenz.
  *
- * Frames arrive ~60×/s. Re-rendering React on every frame would be far too
- * expensive, so the latest car array is kept in a *ref* (`carsRef`) that the
- * three.js render loop reads directly. Only low-frequency data (connection
- * status, track geometry, per-generation stats) lives in React state.
+ * Frames kommen ~60-mal pro Sekunde. Bei jedem Frame React neu zu rendern wäre
+ * viel zu teuer, deshalb liegt das aktuelle Auto-Array in einem *ref* (`carsRef`),
+ * den die three.js-Renderschleife direkt liest. Nur niederfrequente Daten
+ * (Verbindungsstatus, Streckengeometrie, Statistik je Generation) liegen in React-State.
  */
 export function useSimSocket() {
   const wsRef = useRef<WebSocket | null>(null)
@@ -45,12 +46,12 @@ export function useSimSocket() {
             break
           case "track":
             setTrack(msg)
-            setRacingLine(null) // a new circuit invalidates the old racing line
-            setStatsHistory([]) // and the old performance history
+            setRacingLine(null) // neue Strecke macht die alte Racing-Line ungültig
+            setStatsHistory([]) // und ebenso die alte Performance-Historie
             break
           case "stats":
             setStats(msg)
-            // Keep one point per generation for the performance-over-time chart.
+            // Einen Punkt je Generation für den Performance-Verlauf behalten.
             setStatsHistory((h) => {
               const last = h[h.length - 1]
               if (last && last.generation === msg.generation) return h
@@ -70,8 +71,8 @@ export function useSimSocket() {
           case "status":
             setStatus(msg.state)
             setStatusMessage(msg.message)
-            // Nothing is running -> clear the cars so the scene doesn't freeze
-            // on the last frame after a stop / when training finishes.
+            // Nichts läuft, also Autos leeren, damit die Szene nicht auf dem letzten
+            // Frame einfriert (nach Stopp oder Trainingsende).
             if (msg.state === "idle") {
               carsRef.current = []
               setInspect(null)

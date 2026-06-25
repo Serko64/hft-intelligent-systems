@@ -1,4 +1,4 @@
-// Mirror of the JSON messages the FastAPI backend sends (see f1_rl/server/protocol.py).
+// Spiegel der JSON-Nachrichten, die das Backend schickt (siehe f1_rl/server/protocol.py).
 
 export type Vec2 = [number, number]
 
@@ -37,8 +37,8 @@ export interface Car {
   score: number
   reward_parts?: Record<string, number>
   generation: number
-  a_long: number // longitudinal accel m/s² (+ = accelerating, − = braking)
-  a_lat: number // lateral/cornering accel m/s² (signed)
+  a_long: number // Längsbeschleunigung m/s² (positiv = beschleunigen, negativ = bremsen)
+  a_lat: number // Quer- bzw. Kurvenbeschleunigung m/s² (vorzeichenbehaftet)
 }
 
 export interface FrameMsg {
@@ -53,7 +53,7 @@ export interface StatsMsg {
   epsilon: number
   best_fitness: number
   mean_fitness: number
-  top_scores: [number, number][] // Scoreboard: [score, generation], best first
+  top_scores: [number, number][] // Scoreboard: [Score, Generation], best first
 }
 
 export interface StatusMsg {
@@ -62,7 +62,7 @@ export interface StatusMsg {
   message?: string
 }
 
-// The best lap's path. points = [x, y, speed, throttle] in metres / m·s⁻¹ / −1..1.
+// Der Pfad der besten Runde. points = [x, y, Tempo, Gas] in Metern, m/s und -1..1.
 export interface RacingLineMsg {
   type: "racing_line"
   points: [number, number, number, number][]
@@ -70,19 +70,20 @@ export interface RacingLineMsg {
   vmax: number
 }
 
-// One car's neural-net state for the net / Q-value visualisation.
+// Der Netz-Zustand eines Autos für die Netz- bzw. Q-Wert-Visualisierung.
 export interface InspectMsg {
   type: "inspect"
   index: number
-  obs: number[] // 14 inputs
-  q: number[] // 20 Q-values (the DQN "table" for this state)
-  hidden: number[][] // per-layer post-ReLU activations
-  action: number // greedy (chosen) action index
+  obs: number[] // 14 Eingaben
+  q: number[] // 20 Q-Werte (die DQN-„Tabelle" für diesen Zustand)
+  hidden: number[][] // Aktivierungen je Schicht nach ReLU
+  action: number // Index der greedy gewählten Aktion
 }
 
-// The inspected car's Q-table for the heatmap (q-table backend only). Slim payload:
-// values[i] is one row's N_ACTIONS Q-values (capped/down-sampled server-side);
-// n_states is the true total state count (for the caption, may exceed values.length).
+// Die Q-Tabelle des inspizierten Autos für die Heatmap (nur Q-Table-Backend). Schlanke
+// Nutzlast: values[i] sind die N_ACTIONS Q-Werte einer Zeile (serverseitig gedeckelt bzw.
+// heruntergerechnet). n_states ist die echte Gesamtzahl der Zustände (für die Beschriftung,
+// kann values.length übersteigen).
 export interface QTableMsg {
   type: "qtable"
   index: number
@@ -92,7 +93,7 @@ export interface QTableMsg {
 
 export type ServerMsg = TrackMsg | FrameMsg | StatsMsg | StatusMsg | RacingLineMsg | InspectMsg | QTableMsg
 
-// Commands the client sends back.
+// Befehle, die der Client zurück ans Backend schickt.
 export type ClientMsg =
   | {
       type: "start_training"

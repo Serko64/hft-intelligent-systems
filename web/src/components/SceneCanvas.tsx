@@ -11,14 +11,14 @@ interface Props {
   onSelectCar: (i: number | null) => void
 }
 
-/** Hosts the three.js TrackScene and feeds it the live car data + track geometry. */
+/** Beheimatet die three.js-TrackScene und versorgt sie mit den Live-Autodaten und der Streckengeometrie. */
 function SceneCanvasImpl({
   track, carsRef, racingLine, colorMode, selectedCar, onSelectCar,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const sceneRef = useRef<TrackScene | null>(null)
 
-  // Create the scene once.
+  // Szene einmalig erzeugen.
   useEffect(() => {
     if (!canvasRef.current) return
     const scene = new TrackScene(canvasRef.current, () => carsRef.current)
@@ -28,12 +28,12 @@ function SceneCanvasImpl({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [carsRef])
 
-  // Keep the selection callback current without recreating the scene.
+  // Den Auswahl-Callback aktuell halten, ohne die Szene neu zu bauen.
   useEffect(() => {
     sceneRef.current?.setOnCarSelect(onSelectCar)
   }, [onSelectCar])
 
-  // Colour mode (rank vs generation) and externally-driven selection highlight.
+  // Farbmodus (Rang oder Generation) und die von außen gesteuerte Auswahl-Hervorhebung.
   useEffect(() => {
     sceneRef.current?.setColorMode(colorMode)
   }, [colorMode])
@@ -42,12 +42,12 @@ function SceneCanvasImpl({
     sceneRef.current?.setSelected(selectedCar)
   }, [selectedCar])
 
-  // Push new track geometry whenever it changes.
+  // Neue Streckengeometrie übergeben, sobald sie sich ändert.
   useEffect(() => {
     if (track && sceneRef.current) sceneRef.current.setTrack(track)
   }, [track])
 
-  // Draw (or clear) the best-lap racing line.
+  // Die Racing-Line der besten Runde zeichnen oder entfernen.
   useEffect(() => {
     const scene = sceneRef.current
     if (!scene) return

@@ -6,22 +6,22 @@ interface Props {
   line: RacingLineMsg
 }
 
-/** For the current best lap: speed (km/h) and throttle (accel vs brake) over time.
- *  Both charts are zoomable (wheel) and pannable (drag). */
+/** Für die aktuell beste Runde: Tempo (km/h) und Gas/Bremse über die Zeit.
+ *  Beide Charts sind zoombar (Mausrad) und verschiebbar (Ziehen). */
 export function RacingLineChart({ line }: Props) {
   const pts = line.points
   if (pts.length < 2) {
     return <p className="text-xs text-muted-foreground">Noch keine beste Runde.</p>
   }
 
-  // Downsample to keep the chart light; x = time in seconds (60 fps recording).
+  // Herunterrechnen, damit der Chart leicht bleibt. x = Zeit in Sekunden (Aufnahme mit 60 fps).
   const step = Math.max(1, Math.ceil(pts.length / 400))
   const speed: { x: number; y: number }[] = []
   const throttle: { x: number; y: number }[] = []
   for (let i = 0; i < pts.length; i += step) {
     const t = +(i / 60).toFixed(2)
-    speed.push({ x: t, y: Math.round(pts[i][2] * 3.6) }) // m/s → km/h
-    throttle.push({ x: t, y: +pts[i][3].toFixed(2) }) // −1 (Vollbremsung) … 1 (Vollgas)
+    speed.push({ x: t, y: Math.round(pts[i][2] * 3.6) }) // m/s in km/h
+    throttle.push({ x: t, y: +pts[i][3].toFixed(2) }) // -1 (Vollbremsung) bis 1 (Vollgas)
   }
 
   const speedData: LineSeries[] = [{ id: "Tempo", data: speed }]

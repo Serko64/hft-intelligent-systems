@@ -5,6 +5,9 @@ import torch.nn as nn
 from f1_rl.config import N_ACTIONS, N_OBS, NET_DROPOUT, NET_HIDDEN
 
 
+# Das Netz bildet die 14 Beobachtungswerte über die versteckten Schichten auf einen
+# Q-Wert je Aktion ab. Q-Werte kommen ungefiltert heraus, deshalb keine Aktivierung
+# auf der Ausgabeschicht.
 def build_network() -> nn.Sequential:
     sizes = [N_OBS, *NET_HIDDEN, N_ACTIONS]
     layers: list[nn.Module] = []
@@ -18,10 +21,13 @@ def build_network() -> nn.Sequential:
 
 
 def n_params() -> int:
+    # Anzahl aller Gewichte und Bias-Werte, also die Länge des flachen Vektors.
     return sum(p.numel() for p in build_network().parameters())
 
 
 def random_weights() -> np.ndarray:
+    # Frisches Zufalls-Individuum für den GA: Xavier-Initialisierung der Gewichte,
+    # Bias auf null, als flacher Vektor zurück.
     net = build_network()
     with torch.no_grad():
         for module in net.modules():
@@ -31,6 +37,8 @@ def random_weights() -> np.ndarray:
     return network_to_flat(net)
 
 
+# Flachen Vektor wieder in ein Netz schreiben. flat_to_network und network_to_flat
+# sind die Brücke zwischen GA (arbeitet auf einem Vektor) und Torch (braucht Module).
 def flat_to_network(flat: np.ndarray, net: nn.Module | None = None,
                     device: str | torch.device = "cpu") -> nn.Module:
     if net is None:

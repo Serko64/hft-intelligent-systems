@@ -43,7 +43,7 @@ def run_worker(args: tuple) -> tuple[float, np.ndarray, float, float]:
     # ── Vorab allozierter numpy-Replay-Buffer ─────────────────────────────
     # Der Replay-Buffer speichert die letzten REPLAY_CAPACITY Übergänge
     # (Zustand, Aktion, Reward, Folgezustand, fertig?) als fünf parallele
-    # Arrays — Zeile i gehört überall zum selben Übergang. Flache Arrays statt
+    # Arrays, Zeile i gehört überall zum selben Übergang. Flache Arrays statt
     # einer Liste von Tupeln vermeiden Python-Objekt-Erzeugung bei jedem Schritt.
     replay_states = np.zeros((REPLAY_CAPACITY, N_OBS), dtype=np.float32)
     replay_next_states = np.zeros((REPLAY_CAPACITY, N_OBS), dtype=np.float32)
@@ -84,7 +84,7 @@ def run_worker(args: tuple) -> tuple[float, np.ndarray, float, float]:
         if done:
             obs = reset_env(env)
 
-        # Gradienten-Update — alle TRAIN_FREQ Schritte
+        # Gradienten-Update, alle TRAIN_FREQ Schritte
         if buffer_size >= batch_size and step % TRAIN_FREQ == 0:
             # Zufälliges Mini-Batch aus dem Buffer ziehen.
             batch_indices = np.random.choice(
@@ -123,10 +123,10 @@ def run_worker(args: tuple) -> tuple[float, np.ndarray, float, float]:
             target_net.load_state_dict(online_net.state_dict())
 
     # ── Greedy-Eval-Phase (eine Episode) ─────────────────────────────────
-    # Score = Reward einer sauberen Fahrt ab dem Start — spiegelt direkt, wie
+    # Score = Reward einer sauberen Fahrt ab dem Start, spiegelt direkt, wie
     # weit der Agent kommt, vergleichbar mit der Live-Anzeige. eval_steps ist an
     # die Streckenlänge budgetiert, damit eine volle Runde (und ihr Ziel-Bonus)
-    # erreichbar ist; die Schleife bricht bei Crash/Runde trotzdem früh ab.
+    # erreichbar ist, die Schleife bricht bei Crash oder Runde trotzdem früh ab.
     online_net.eval()
 
     def greedy_episode(start_progress: float) -> float:
@@ -142,7 +142,7 @@ def run_worker(args: tuple) -> tuple[float, np.ndarray, float, float]:
                 break
         return total_reward
 
-    # Standard-Start (am Start/Ziel) zählt immer — auch als Geister-/Endposition.
+    # Standard-Start (am Start/Ziel) zählt immer, auch als Geister- bzw. Endposition.
     eval_reward = greedy_episode(0.0)
     crash_x = env["x_m"]
     crash_y = env["y_m"]

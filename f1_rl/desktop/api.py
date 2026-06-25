@@ -9,6 +9,9 @@ from f1_rl.simulation.track_loader import load_track
 from f1_rl.utils.queues import get_latest
 
 
+# Diese Klasse ist die Brücke zum Frontend: pywebview reicht jede Methode als
+# aufrufbare JS-API ins Web-UI. Die eigentliche Logik liegt in server.session, hier
+# werden nur die Roh-Argumente angenommen und die Antworten ins JSON-Format gebracht.
 class Api:
     def list_circuits(self) -> list[str]:
         return [c[0] for c in CIRCUITS]
@@ -51,6 +54,8 @@ class Api:
     def stop(self) -> None:
         session.stop_session()
 
+    # Das Frontend fragt im Takt poll() ab und holt jeweils nur den neuesten Stand
+    # aus jeder Queue. Felder, für die nichts Neues vorliegt, fehlen einfach.
     def poll(self) -> dict:
         out: dict = {"status": SESSION["mode"]}
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react"
 import type { QTableMsg } from "@/lib/types"
 
-/** Diverging colour: negative → blue, ~0 → grey, positive → red. (Mirrors NetView.) */
+/** Divergierende Farbe: negativ blau, um 0 grau, positiv rot. (Spiegelt NetView.) */
 function diverging(v: number, scale: number): string {
   const t = Math.max(-1, Math.min(1, v / (scale || 1)))
   if (t >= 0) {
@@ -15,16 +15,16 @@ function diverging(v: number, scale: number): string {
 const CANVAS_W = 280
 const CANVAS_H = 320
 
-/** The full learned Q-table of the inspected car as a heatmap.
- *  One row per state, one column per action, colour = Q-value. Rendered to a
- *  <canvas> so it stays fast even with thousands of states (the table grows as the
- *  agent explores). Rows fill the fixed height proportionally, so the heatmap
- *  visibly "fills up" over generations. */
+/** Die komplette gelernte Q-Tabelle des inspizierten Autos als Heatmap.
+ *  Eine Zeile je Zustand, eine Spalte je Aktion, Farbe = Q-Wert. Auf ein <canvas>
+ *  gezeichnet, damit es auch bei tausenden Zuständen flott bleibt (die Tabelle wächst,
+ *  während der Agent erkundet). Die Zeilen füllen die feste Höhe anteilig, die Heatmap
+ *  „füllt sich" also über die Generationen sichtbar auf. */
 export function QTableHeatmap({ table }: { table: QTableMsg }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const { values } = table
-  const nStates = table.n_states          // true learned-state count (for the caption)
-  const nRows = values.length             // rows actually sent (capped/down-sampled)
+  const nStates = table.n_states          // echte Zahl gelernter Zustände (für die Beschriftung)
+  const nRows = values.length             // tatsächlich gesendete Zeilen (gedeckelt bzw. heruntergerechnet)
   const nActions = values[0]?.length ?? 20
 
   useEffect(() => {
@@ -35,7 +35,7 @@ export function QTableHeatmap({ table }: { table: QTableMsg }) {
     ctx.clearRect(0, 0, CANVAS_W, CANVAS_H)
     if (nRows === 0) return
 
-    // Global magnitude so the diverging scale is comparable across all cells.
+    // Globaler Betrag, damit die divergierende Skala über alle Zellen vergleichbar ist.
     let scale = 1e-6
     for (const row of values) for (const v of row) scale = Math.max(scale, Math.abs(v))
 

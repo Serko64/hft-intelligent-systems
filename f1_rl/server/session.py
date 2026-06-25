@@ -22,9 +22,9 @@ class SessionState(TypedDict):
     line_q: queue.Queue | None           # Racing-Line der besten Runde
     inspect_q: queue.Queue | None        # Netz-/Q-Detail des inspizierten Autos
     table_q: queue.Queue | None          # volle Q-Tabelle (nur Q-Table-Modus)
-    # [int] — live verstellbare Sim-Geschwindigkeit
+    # [int], live verstellbare Sim-Geschwindigkeit
     speed_holder: list
-    # [int | None] — Index des inspizierten Autos
+    # [int | None], Index des inspizierten Autos
     inspect_holder: list
     stop_event: threading.Event
     thread: threading.Thread | None
@@ -162,7 +162,7 @@ def _drive_loop(track: Track, use_rays: bool, backend: str, stop_event: threadin
     while not stop_event.is_set():
         frame_start = time.perf_counter()
         frame_no += 1
-        # Mehrere Sim-Schritte pro gerendertem Bild; das Bild zeigt den Endzustand.
+        # Mehrere Sim-Schritte pro gerendertem Bild, das Bild zeigt den Endzustand.
         terminated = False
         for _ in range(max(1, int(speed_holder[0]))):
             action = choose_action(policy, obs)
@@ -205,7 +205,7 @@ def start_driving(circuit: str, use_rays: bool = True, backend: str = "dqn") -> 
     if not os.path.exists(model_path):
         label = "Q-Table" if backend == "qtable" else "DQN-Modell"
         raise FileNotFoundError(
-            f"Kein trainiertes {label} unter {model_path} — erst trainieren.")
+            f"Kein trainiertes {label} unter {model_path}, erst trainieren.")
     SESSION["track"] = _load_session_track(circuit)
     SESSION["render_q"] = queue.Queue(maxsize=4)
     SESSION["stats_q"] = None

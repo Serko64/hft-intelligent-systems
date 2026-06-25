@@ -15,9 +15,9 @@ interface Props {
 
 const G = 9.81
 
-/** Inspector for one clicked car: live stats, score breakdown and the forces
- *  currently acting on it (a small top-down view). Reads the car from the frame
- *  ref at ~10 Hz so it doesn't re-render every frame. */
+/** Inspektor für ein angeklicktes Auto: Live-Werte, Aufschlüsselung des Scores und
+ *  die gerade wirkenden Kräfte (kleine Draufsicht). Liest das Auto ~10-mal pro Sekunde
+ *  aus dem Frame-Ref, rendert also nicht bei jedem Frame neu. */
 export function CarInspector({ carsRef, index, inspect, qtable, onClose }: Props) {
   const [car, setCar] = useState<Car | null>(null)
   const [showNet, setShowNet] = useState(false)
@@ -36,7 +36,7 @@ export function CarInspector({ carsRef, index, inspect, qtable, onClose }: Props
     )
   }
 
-  // Q-table message for *this* car (q-table backend); null in DQN mode.
+  // Q-Tabellen-Nachricht für *dieses* Auto (Q-Table-Backend), im DQN-Modus null.
   const qtableForThis = qtable && qtable.index === index ? qtable : null
   const isQtable = qtableForThis !== null
 
@@ -91,7 +91,7 @@ export function CarInspector({ carsRef, index, inspect, qtable, onClose }: Props
         )}
       </div>
 
-      {/* Net/Q (DQN) or Q-table heatmap (q-table mode) — streamed only while inspected. */}
+      {/* Netz/Q (DQN) oder Q-Tabellen-Heatmap (Q-Table-Modus), nur während der Inspektion gestreamt. */}
       <div>
         <button
           className="flex w-full items-center justify-between text-xs font-semibold text-muted-foreground hover:text-foreground"
@@ -160,13 +160,13 @@ function Stat({ label, value }: { label: string; value: string }) {
   )
 }
 
-/** Top-down mini view of the forces acting on the car (car points up). */
+/** Mini-Draufsicht der auf das Auto wirkenden Kräfte (Auto zeigt nach oben). */
 function Forces({ aLong, aLat }: { aLong: number; aLat: number }) {
   const S = 110
   const cx = S / 2
   const cy = S / 2
-  const scale = 1.0 // px per m/s²  (GRIP_MAX≈45 → ~45px)
-  // Up = forward accel; down = braking. Left = turning left (a_lat > 0).
+  const scale = 1.0 // Pixel je m/s² (GRIP_MAX≈45 ergibt ~45px)
+  // Oben = Beschleunigen, unten = Bremsen. Links = Linkskurve (a_lat > 0).
   const longY = cy - aLong * scale
   const latX = cx - aLat * scale
   const gLong = (aLong / G).toFixed(1)
@@ -176,15 +176,15 @@ function Forces({ aLong, aLat }: { aLong: number; aLat: number }) {
   return (
     <div className="flex items-center gap-3">
       <svg width={S} height={S} className="shrink-0 rounded bg-black/30">
-        {/* grip-circle reference (≈4.6 g) */}
+        {/* Grip-Kreis als Referenz (≈4.6 g) */}
         <circle cx={cx} cy={cy} r={45} fill="none" stroke="#334155" strokeDasharray="3 3" />
         <line x1={cx} y1={4} x2={cx} y2={S - 4} stroke="#1e293b" />
         <line x1={4} y1={cy} x2={S - 4} y2={cy} stroke="#1e293b" />
-        {/* car body, pointing up */}
+        {/* Auto-Körper, zeigt nach oben */}
         <rect x={cx - 5} y={cy - 10} width={10} height={20} rx={2} fill="#e2e8f0" />
-        {/* longitudinal force (accel green up / brake red down) */}
+        {/* Längskraft (Beschleunigen grün nach oben, Bremsen rot nach unten) */}
         <line x1={cx} y1={cy} x2={cx} y2={longY} stroke={aLong >= 0 ? "#22c55e" : "#ef4444"} strokeWidth={2.5} />
-        {/* lateral force */}
+        {/* Querkraft */}
         <line x1={cx} y1={cy} x2={latX} y2={cy} stroke="#38bdf8" strokeWidth={2.5} />
       </svg>
       <div className="space-y-0.5 text-xs tabular-nums">

@@ -9,8 +9,8 @@ interface Props {
 }
 
 /**
- * Telemetry overlay. Reads the lead car from the frame ref at ~10 Hz (so it does
- * not re-render at the full 60 fps) and shows per-generation training stats.
+ * Telemetrie-Overlay. Liest das führende Auto ~10-mal pro Sekunde aus dem Frame-Ref
+ * (rendert also nicht mit vollen 60 fps neu) und zeigt die Trainings-Statistik je Generation.
  */
 function HudImpl({ carsRef, stats }: Props) {
   const [lead, setLead] = useState<Car | null>(null)

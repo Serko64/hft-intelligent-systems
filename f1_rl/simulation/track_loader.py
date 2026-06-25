@@ -25,16 +25,16 @@ class Track(TypedDict):
     centerline_m: LineString    # Streckenmitte in Metern (shapely-Linie)
     corridor: Polygon           # befahrbare Fläche (Centerline ± half_width_m)
     total_length_m: float
-    centerline_px: np.ndarray   # (N, 2) float32 — Pixel-Koordinaten
-    corridor_px: np.ndarray     # (M, 2) float32 — äußerer Rand in Pixeln
+    centerline_px: np.ndarray   # (N, 2) float32, Pixel-Koordinaten
+    corridor_px: np.ndarray     # (M, 2) float32, äußerer Rand in Pixeln
     canvas_w: int
     canvas_h: int
-    px_scale: float             # Meter → Pixel
+    px_scale: float             # Umrechnung Meter in Pixel
     px_origin_x: float
     px_origin_y: float          # Y ist gespiegelt
     bounds_center: tuple[float, float]
     half_diag_m: float          # halbe Diagonale der Bounding-Box
-    half_width_m: float         # halbe Streckenbreite — für die Crash-Prüfung
+    half_width_m: float         # halbe Streckenbreite, für die Crash-Prüfung
     corridor_interior_px: np.ndarray | None
 
 
@@ -121,13 +121,13 @@ def load_track_osmnx(
             with open(cache_path, "rb") as f:
                 return pickle.load(f)
         except Exception as e:
-            # Ein kaputter Cache darf die App nie crashen — einfach neu bauen.
+            # Ein kaputter Cache darf die App nie crashen, dann einfach neu bauen.
             print(f"[track] Ignoring unreadable cache {cache_path}: {e}")
 
     import osmnx as ox
 
     # features_from_address sucht im Umkreis von `dist` Metern um den geocodierten
-    # Punkt — zuverlässiger als features_from_place für benannte Rennstrecken.
+    # Punkt, zuverlässiger als features_from_place für benannte Rennstrecken.
     try:
         gdf = ox.features_from_address(
             query, tags={"highway": "raceway"}, dist=10_000)

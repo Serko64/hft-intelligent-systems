@@ -1,5 +1,5 @@
-// Mirror of DISCRETE_ACTIONS in f1_rl/simulation/environment.py — the 20 discrete
-// (steering, throttle) combos, in the exact same order the network outputs them.
+// Spiegel von DISCRETE_ACTIONS in f1_rl/simulation/environment.py, die 20 diskreten
+// Kombinationen aus (Lenken, Gas), in genau der Reihenfolge, in der das Netz sie ausgibt.
 const STEER = [-1.0, -0.5, 0.0, 0.5, 1.0]
 const THROTTLE = [-1.0, 0.0, 0.5, 1.0]
 
@@ -12,7 +12,7 @@ const steerLabel = (s: number) =>
 const throttleLabel = (t: number) =>
   t < 0 ? "Bremse" : t === 0 ? "Schub 0" : `Gas ${t}`
 
-/** Short human label for an action index, e.g. "→0.5 · Gas 1". */
+/** Kurzes, lesbares Label für einen Aktionsindex, z. B. "→0.5 · Gas 1". */
 export function actionLabel(i: number): string {
   const [s, t] = DISCRETE_ACTIONS[i] ?? [0, 0]
   return `${steerLabel(s)} · ${throttleLabel(t)}`

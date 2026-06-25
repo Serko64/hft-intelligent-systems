@@ -2,27 +2,27 @@ import * as THREE from "three"
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js"
 import type { Car, PolyRings, TrackMsg, Vec2 } from "@/lib/types"
 
-// ── Tweakables ────────────────────────────────────────────────────────────────
-const CAR_LENGTH_M = 5 // real F1 length; matches the training bbox (env CAR_LENGTH_M)
+// ── Einstellbare Werte ──────────────────────────────────────────────────────────
+const CAR_LENGTH_M = 5 // echte F1-Länge, passt zur Trainings-Bounding-Box (env CAR_LENGTH_M)
 
 // Sensor-Strahlen des angeklickten Autos (spiegelt environment.py: RAY_ANGLES / MAX_RAY_M).
 const RAY_ANGLES_RAD = [-75, -45, -20, 0, 20, 45, 75].map((d) => (d * Math.PI) / 180)
 const MAX_RAY_M = 80
 
-const GRASS = 0x2f6b22 // lively green so the dark track + red kerb pop
-const ASPHALT = 0x37352f // racing surface (FIA cross-section "Strecke")
-const WALL = 0xf4f4ee // bright white track-limit line
+const GRASS = 0x2f6b22 // kräftiges Grün, damit die dunkle Strecke und der rote Randstein hervorstechen
+const ASPHALT = 0x37352f // Fahrbahn (FIA-Querschnitt "Strecke")
+const WALL = 0xf4f4ee // helle weiße Streckenbegrenzungslinie
 const CENTERLINE = 0xffd200
 const KERB_RED = 0xc0392b
 const KERB_WHITE = 0xeeeeee
 
-// Thin grey asphalt verge just outside the white line; the striped kerb is built
-// separately on top of it as an extruded strip (see buildEdgeStrip).
+// Schmaler grauer Asphaltstreifen direkt außerhalb der weißen Linie. Der gestreifte
+// Randstein wird separat als extrudierter Streifen darübergelegt (siehe buildEdgeStrip).
 const ZONE_STYLE: Record<string, { color: number; z: number }> = {
-  runoff: { color: 0x6e6c66, z: -0.4 }, // grey asphalt verge
+  runoff: { color: 0x6e6c66, z: -0.4 }, // grauer Asphaltstreifen
 }
 
-/** Rank → colour (hex), mirroring the pygame view (best = gold ... worst = dark red). */
+/** Rang zu Farbe (hex), wie die pygame-Ansicht (bester = Gold bis schlechtester = Dunkelrot). */
 function rankColorHex(rank: number, total: number): number {
   const f = total > 1 ? rank / (total - 1) : 0
   if (f < 0.08) return 0xffd700
@@ -31,7 +31,7 @@ function rankColorHex(rank: number, total: number): number {
   return 0x8a3a3a
 }
 
-/** Generation → a stable distinct colour (golden-ratio hue hashing). */
+/** Generation zu einer stabilen, gut unterscheidbaren Farbe (Hue über goldenen Schnitt). */
 function genColorHex(gen: number): number {
   const hue = (gen * 0.6180339887) % 1
   return new THREE.Color().setHSL(hue, 0.7, 0.55).getHex()
@@ -41,15 +41,16 @@ export type ColorMode = "rank" | "generation"
 
 interface CarObj {
   group: THREE.Group
-  bodyMaterial: THREE.MeshStandardMaterial // tinted per-frame by rank
-  lastHex: number // zuletzt gesetzte Farbe — vermeidet überflüssige setHex-Aufrufe pro Frame
+  bodyMaterial: THREE.MeshStandardMaterial // je Frame nach Rang eingefärbt
+  lastHex: number // zuletzt gesetzte Farbe, vermeidet überflüssige setHex-Aufrufe pro Frame
 }
 
 /**
- * Renders the circuit and the live cars in a freely-movable 3D view
- * (PerspectiveCamera + OrbitControls: left-drag orbit, right-drag pan, wheel
- * zoom). All coordinates are in metres (z is up). The render loop reads the
- * latest cars via `getCars` each frame, so React never re-renders at 60 fps.
+ * Rendert die Strecke und die Live-Autos in einer frei beweglichen 3D-Ansicht
+ * (PerspectiveCamera und OrbitControls: Linksziehen dreht, Rechtsziehen verschiebt,
+ * Mausrad zoomt). Alle Koordinaten sind in Metern (z zeigt nach oben). Die Render-
+ * schleife liest die aktuellen Autos je Frame über `getCars`, React rendert also
+ * nie mit 60 fps neu.
  */
 export class TrackScene {
   private renderer: THREE.WebGLRenderer
@@ -59,7 +60,7 @@ export class TrackScene {
   private trackGroup = new THREE.Group()
   private racingLine: THREE.Mesh | null = null
   private carPool: CarObj[] = []
-  private carScale = 1 // cars are scaled up on big circuits so they stay visible
+  private carScale = 1 // auf großen Strecken werden die Autos vergrößert, damit sie sichtbar bleiben
   private colorMode: ColorMode = "rank"
   private selectedIndex: number | null = null
   private onCarSelect: ((i: number | null) => void) | null = null
@@ -75,34 +76,34 @@ export class TrackScene {
   constructor(canvas: HTMLCanvasElement, getCars: () => Car[]) {
     this.canvas = canvas
     this.getCars = getCars
-    // logarithmicDepthBuffer keeps depth precision usable across the huge
-    // near→far range (a few metres up to kilometre-wide circuits), which is what
-    // otherwise causes the stacked track layers to z-fight ("clip").
+    // logarithmicDepthBuffer hält die Tiefengenauigkeit über den riesigen Bereich von
+    // nah bis fern brauchbar (wenige Meter bis kilometerbreite Strecken). Sonst würden
+    // die gestapelten Streckenschichten ums Z konkurrieren ("clippen").
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, logarithmicDepthBuffer: true })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     this.scene.background = new THREE.Color(GRASS)
     this.scene.add(this.trackGroup)
 
-    // z-up perspective camera, controllable with the mouse.
+    // Perspektivkamera mit z nach oben, per Maus steuerbar.
     this.camera = new THREE.PerspectiveCamera(50, 1, 1, 500000)
     this.camera.up.set(0, 0, 1)
     this.camera.position.set(0, -200, 200)
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement)
     this.controls.enableDamping = true
-    this.controls.dampingFactor = 0.12 // snappier than the old sluggish 0.08
-    this.controls.minDistance = 3 // zoom right up to a single car
+    this.controls.dampingFactor = 0.12 // direkter als das alte träge 0.08
+    this.controls.minDistance = 3 // bis ganz an ein einzelnes Auto heranzoomen
     this.controls.maxDistance = 200000
-    // Zoom toward the mouse cursor instead of the (often far-off) target, so you
-    // can dive straight onto a single car without the zoom "sticking" at min
-    // distance from the track centre.
+    // Zum Mauszeiger zoomen statt zum (oft weit entfernten) Ziel, damit man direkt
+    // auf ein einzelnes Auto zugehen kann, ohne dass der Zoom an der Mindestdistanz
+    // zur Streckenmitte „hängenbleibt".
     this.controls.zoomToCursor = true
     this.controls.zoomSpeed = 1.6
     this.controls.panSpeed = 1.2
     this.controls.rotateSpeed = 0.9
-    this.controls.screenSpacePanning = true // right-drag pans in view plane (intuitive)
-    // Keep the camera above the ground and just shy of the exact top-down pole,
-    // where orbiting otherwise flips/freezes (gimbal lock with a z-up camera).
+    this.controls.screenSpacePanning = true // Rechtsziehen verschiebt in der Bildebene (intuitiv)
+    // Kamera über dem Boden halten und knapp vor dem exakten Senkrecht-von-oben-Pol,
+    // wo das Drehen sonst kippt oder einfriert (Gimbal Lock bei z-nach-oben-Kamera).
     this.controls.minPolarAngle = 0.08
     this.controls.maxPolarAngle = Math.PI / 2 - 0.05
     this.controls.target.set(0, 0, 0)
@@ -113,7 +114,7 @@ export class TrackScene {
     dir.position.set(0.4, 0.6, 1)
     this.scene.add(dir)
 
-    // Flat ring drawn under the selected car to highlight it.
+    // Flacher Ring unter dem ausgewählten Auto, um es hervorzuheben.
     this.selectionRing = new THREE.Mesh(
       new THREE.RingGeometry(3.2, 4.2, 32),
       new THREE.MeshBasicMaterial({ color: 0x39d0ff, transparent: true, opacity: 0.9, side: THREE.DoubleSide }),
@@ -132,8 +133,8 @@ export class TrackScene {
     this.raysObj.renderOrder = 12
     this.scene.add(this.raysObj)
 
-    // Click a car to select it (only when the pointer barely moved, so orbiting
-    // the camera doesn't trigger a selection).
+    // Klick auf ein Auto wählt es aus (nur wenn der Zeiger kaum bewegt wurde, damit
+    // das Drehen der Kamera keine Auswahl auslöst).
     this.canvas.addEventListener("pointerdown", this.onPointerDown)
     this.canvas.addEventListener("pointerup", this.onPointerUp)
 
@@ -145,38 +146,38 @@ export class TrackScene {
     this.raf = requestAnimationFrame(this.loop)
   }
 
-  // ── Track geometry ────────────────────────────────────────────────────────
+  // ── Streckengeometrie ───────────────────────────────────────────────────────
   setTrack(track: TrackMsg) {
     this.trackGroup.clear()
 
-    // Smoothed corridor rings (Chaikin) so jagged OSM polylines read as flowing
-    // racetrack curves. The same smoothed rings drive the kerb + white line so
-    // every layer lines up exactly.
+    // Geglättete Korridorringe (Chaikin), damit eckige OSM-Polylinien als fließende
+    // Streckenkurven wirken. Dieselben geglätteten Ringe treiben Randstein und weiße
+    // Linie, damit jede Schicht exakt übereinanderliegt.
     const exterior = this.smooth(track.corridor_exterior)
     const interiors = track.corridor_interiors.map((r) => this.smooth(r))
     const rings = [exterior, ...interiors]
 
-    // The track is built as stacked flat layers. Each gets a distinct render
-    // order + z so they never z-fight: grey verge (bottom) → striped kerb →
-    // asphalt → white line → centerline (top).
+    // Die Strecke entsteht aus gestapelten flachen Schichten. Jede bekommt eine eigene
+    // Render-Reihenfolge und ein eigenes z, damit sie nie ums Z konkurrieren: grauer
+    // Streifen (unten), gestreifter Randstein, Asphalt, weiße Linie, Mittellinie (oben).
     for (const zone of track.zones ?? []) {
       const st = ZONE_STYLE[zone.name]
       if (!st) continue
       for (const poly of zone.polygons) this.trackGroup.add(this.fillPolygon(poly, st.color, st.z, 1))
     }
 
-    // Red/white striped kerb hugging the track edge, then the racing surface on
-    // top of it (covering the inner half of the strip), then a bold white line.
+    // Rot-weiß gestreifter Randstein direkt an der Streckenkante, darüber die Fahrbahn
+    // (deckt die innere Hälfte des Streifens ab), darüber eine kräftige weiße Linie.
     this.trackGroup.add(this.buildEdgeStrip(rings, 1.4, -0.3, { striped: true, stripeLen: 4, order: 2 }))
 
-    // Racing surface: corridor exterior with the infield rings as holes.
+    // Fahrbahn: Korridor-Außenring mit den Infield-Ringen als Löchern.
     this.trackGroup.add(this.fillPolygon({ exterior, interiors }, ASPHALT, -0.2, 3))
 
-    // Bold white track-limit line, drawn as a thin band so it stays visible when
-    // zoomed out (a 1 px line would vanish).
+    // Kräftige weiße Begrenzungslinie, als schmales Band gezeichnet, damit sie auch
+    // herausgezoomt sichtbar bleibt (eine 1-Pixel-Linie würde verschwinden).
     this.trackGroup.add(this.buildEdgeStrip(rings, 0.6, -0.1, { color: WALL, order: 4 }))
 
-    // Dashed yellow centerline.
+    // Gelb gestrichelte Mittellinie.
     const clGeo = new THREE.BufferGeometry().setFromPoints(
       this.smooth(track.centerline).map(([x, y]) => new THREE.Vector3(x, y, -0.05)),
     )
@@ -186,9 +187,9 @@ export class TrackScene {
     cl.renderOrder = 5
     this.trackGroup.add(cl)
 
-    // Cars render at their true physical size (≈5 m), so they sit realistically
-    // on the 16 m-wide track instead of being inflated wider than the asphalt.
-    // On huge circuits a car is small from the framing angle — zoom in to see it.
+    // Autos werden in ihrer echten physischen Größe gerendert (≈5 m), sie sitzen also
+    // realistisch auf der 16 m breiten Strecke, statt breiter als der Asphalt zu wirken.
+    // Auf riesigen Strecken ist ein Auto aus der Rahmung klein, zum Sehen hineinzoomen.
     const cx = (track.bounds.minx + track.bounds.maxx) / 2
     const cy = (track.bounds.miny + track.bounds.maxy) / 2
     const span = Math.max(
@@ -196,7 +197,7 @@ export class TrackScene {
       track.bounds.maxy - track.bounds.miny,
     )
 
-    // Frame the whole circuit from a tilted bird's-eye angle.
+    // Die ganze Strecke aus einem geneigten Vogelperspektiven-Winkel einrahmen.
     this.controls.target.set(cx, cy, 0)
     this.camera.position.set(cx, cy - span * 0.55, span * 0.55)
     this.controls.update()
@@ -204,10 +205,10 @@ export class TrackScene {
     this.resize()
   }
 
-  // ── Racing line ─────────────────────────────────────────────────────────────
-  /** Draw the best lap as a flat ribbon coloured by speed (red = slow corner,
-   *  green = fast straight). `points` are [x, y, speed] in metres / m·s⁻¹; vmin
-   *  and vmax fix the colour scale. Replaces any previously drawn line. */
+  // ── Racing-Line ───────────────────────────────────────────────────────────────
+  /** Zeichnet die beste Runde als flaches Band, eingefärbt nach Tempo (rot = langsame
+   *  Kurve, grün = schnelle Gerade). `points` sind [x, y, Tempo] in Metern und m/s,
+   *  vmin und vmax legen die Farbskala fest. Ersetzt eine zuvor gezeichnete Linie. */
   setRacingLine(points: [number, number, number, number][], vmin: number, vmax: number) {
     this.clearRacingLine()
     if (points.length < 2) return
@@ -219,7 +220,7 @@ export class TrackScene {
     const colors: number[] = []
     const colorAt = (speed: number) => {
       const t = Math.min(1, Math.max(0, (speed - vmin) / span))
-      return new THREE.Color().setHSL(t * 0.33, 1, 0.5) // hue 0=red → 0.33=green
+      return new THREE.Color().setHSL(t * 0.33, 1, 0.5) // Hue 0 = rot, 0.33 = grün
     }
 
     for (let i = 0; i < points.length - 1; i++) {
@@ -234,7 +235,7 @@ export class TrackScene {
       const ny = dx * half
       const ca = colorAt(av)
       const cb = colorAt(bv)
-      // Two triangles forming the quad between point a and point b.
+      // Zwei Dreiecke, die das Viereck zwischen Punkt a und Punkt b bilden.
       positions.push(ax + nx, ay + ny, 0, ax - nx, ay - ny, 0, bx - nx, by - ny, 0)
       positions.push(ax + nx, ay + ny, 0, bx - nx, by - ny, 0, bx + nx, by + ny, 0)
       colors.push(ca.r, ca.g, ca.b, ca.r, ca.g, ca.b, cb.r, cb.g, cb.b)
@@ -253,17 +254,17 @@ export class TrackScene {
         polygonOffsetUnits: -10,
       }),
     )
-    mesh.position.z = 0.08 // just above every track layer (which sit at z < 0)
+    mesh.position.z = 0.08 // knapp über allen Streckenschichten (die bei z < 0 liegen)
     mesh.renderOrder = 10
     this.racingLine = mesh
     this.scene.add(mesh)
   }
 
-  /** Thin out the per‑frame racing line before it becomes geometry. A point is
-   *  kept only if dropping it would bend the ribbon (perp. distance > posEps
-   *  metres) or shift its speed colour (Δspeed > spdEps m/s). Long constant‑speed
-   *  straights collapse to two points, cutting the vertex count by an order of
-   *  magnitude with no visible change. Speed‑aware Douglas–Peucker (iterative). */
+  /** Dünnt die je Frame aufgezeichnete Racing-Line aus, bevor sie zu Geometrie wird.
+   *  Ein Punkt bleibt nur, wenn sein Weglassen das Band biegen würde (Abstand > posEps
+   *  Meter) oder seine Tempo-Farbe verschiebt (ΔTempo > spdEps m/s). Lange Geraden mit
+   *  konstantem Tempo schrumpfen auf zwei Punkte, das senkt die Vertex-Zahl um eine
+   *  Größenordnung ohne sichtbaren Unterschied. Tempo-bewusster Douglas-Peucker (iterativ). */
   private static simplifyLine(
     pts: [number, number, number, number][],
     posEps = 0.6,
@@ -272,7 +273,7 @@ export class TrackScene {
     if (pts.length < 3) return pts
     const keep = new Uint8Array(pts.length)
     keep[0] = keep[pts.length - 1] = 1
-    const spdScale = posEps / spdEps // express Δspeed as a position‑equivalent deviation
+    const spdScale = posEps / spdEps // ΔTempo als positions-äquivalente Abweichung ausdrücken
     const stack: [number, number][] = [[0, pts.length - 1]]
     while (stack.length) {
       const [lo, hi] = stack.pop()!
@@ -289,7 +290,7 @@ export class TrackScene {
       for (let i = lo + 1; i < hi; i++) {
         const [px, py, pv] = pts[i]
         const perp = Math.abs((px - ax) * -dy + (py - ay) * dx)
-        const t = ((px - ax) * dx + (py - ay) * dy) / len // 0..1 along the segment
+        const t = ((px - ax) * dx + (py - ay) * dy) / len // 0..1 entlang des Segments
         const spd = Math.abs(pv - (av + (bv - av) * t)) * spdScale
         const dev = Math.max(perp, spd)
         if (dev > worst) {
@@ -315,9 +316,9 @@ export class TrackScene {
     this.racingLine = null
   }
 
-  /** Build a flat filled polygon (with holes) at height z. `order` fixes the
-   *  paint order of the near-coplanar track layers and biases their depth via
-   *  polygonOffset, so higher layers always win cleanly instead of z-fighting. */
+  /** Baut ein flaches gefülltes Polygon (mit Löchern) auf Höhe z. `order` legt die
+   *  Zeichenreihenfolge der fast koplanaren Streckenschichten fest und beeinflusst ihre
+   *  Tiefe über polygonOffset, sodass höhere Schichten sauber gewinnen statt zu z-fighten. */
   private fillPolygon(rings: PolyRings, color: number, z: number, order = 0): THREE.Mesh {
     const shape = new THREE.Shape(rings.exterior.map(([x, y]) => new THREE.Vector2(x, y)))
     for (const hole of rings.interiors) {
@@ -339,9 +340,9 @@ export class TrackScene {
     return mesh
   }
 
-  /** Chaikin corner-cutting: rounds off the angular OSM polylines into smooth
-   *  racetrack curves. Treated as a closed ring. Skipped for already-dense rings
-   *  (would explode the vertex count) or degenerate ones. */
+  /** Chaikin-Eckenschneiden: rundet die eckigen OSM-Polylinien zu glatten Strecken-
+   *  kurven. Wird als geschlossener Ring behandelt. Übersprungen bei bereits dichten
+   *  Ringen (würde die Vertex-Zahl explodieren lassen) oder entarteten Ringen. */
   private smooth(pts: Vec2[]): Vec2[] {
     if (pts.length < 4 || pts.length > 160) return pts
     let cur = pts
@@ -358,7 +359,7 @@ export class TrackScene {
     return cur
   }
 
-  /** Signed area of a closed ring (>0 ⇒ counter-clockwise winding). */
+  /** Vorzeichenbehaftete Fläche eines geschlossenen Rings (>0 bedeutet Drehsinn gegen den Uhrzeigersinn). */
   private static signedArea(ring: Vec2[]): number {
     let a = 0
     for (let i = 0; i < ring.length; i++) {
@@ -369,12 +370,12 @@ export class TrackScene {
     return a / 2
   }
 
-  /** Extrude each ring outward into a flat strip (a kerb or a track-limit line).
-   *  The offset direction is derived from the ring's winding (signed area), which
-   *  is correct for every segment even on twisty circuits — unlike a centroid
-   *  test, which flips on the far side of a winding track. The exterior ring
-   *  grows outward (away from the surface); interior rings grow into their hole.
-   *  With `striped`, quads alternate red/white by arc length (the F1 kerb). */
+  /** Extrudiert jeden Ring nach außen zu einem flachen Streifen (Randstein oder
+   *  Begrenzungslinie). Die Versatzrichtung kommt aus dem Drehsinn des Rings (Vorzeichen
+   *  der Fläche) und stimmt für jedes Segment auch auf kurvigen Strecken, anders als ein
+   *  Schwerpunkt-Test, der auf der Gegenseite einer Schleife kippt. Der Außenring wächst
+   *  nach außen (weg von der Fläche), Innenringe wachsen in ihr Loch hinein. Mit `striped`
+   *  wechseln die Vierecke nach Bogenlänge rot und weiß (der F1-Randstein). */
   private buildEdgeStrip(
     rings: Vec2[][],
     width: number,
@@ -390,9 +391,9 @@ export class TrackScene {
     const stripeLen = opts.stripeLen ?? 4
 
     rings.forEach((ring, idx) => {
-      const isHole = idx > 0 // interior rings extrude into their hole
-      // For a CCW ring (area>0) the rotate-right normal (dy,-dx) points away from
-      // the enclosed area. Holes want the opposite (into the hole).
+      const isHole = idx > 0 // Innenringe extrudieren in ihr Loch hinein
+      // Bei einem Ring gegen den Uhrzeigersinn (Fläche>0) zeigt die nach rechts gedrehte
+      // Normale (dy,-dx) weg von der eingeschlossenen Fläche. Löcher wollen das Gegenteil.
       const sign = Math.sign(TrackScene.signedArea(ring)) * (isHole ? -1 : 1)
       let arc = 0
       for (let i = 0; i < ring.length; i++) {
@@ -408,7 +409,7 @@ export class TrackScene {
         const bx2 = b[0] + nx * width
         const by2 = b[1] + ny * width
 
-        // Two triangles: a, b, b2 and a, b2, a2.
+        // Zwei Dreiecke: a, b, b2 und a, b2, a2.
         positions.push(a[0], a[1], 0, b[0], b[1], 0, bx2, by2, 0)
         positions.push(a[0], a[1], 0, bx2, by2, 0, ax2, ay2, 0)
 
@@ -439,10 +440,10 @@ export class TrackScene {
     return mesh
   }
 
-  // ── Per-frame update ────────────────────────────────────────────────────────
+  // ── Update je Frame ───────────────────────────────────────────────────────────
   private loop() {
     this.raf = requestAnimationFrame(this.loop)
-    // Bei verstecktem Tab nicht rendern/rechnen — spart GPU/CPU im Hintergrund.
+    // Bei verstecktem Tab nicht rendern oder rechnen, das spart GPU und CPU im Hintergrund.
     if (document.hidden) return
 
     const cars = this.getCars()
@@ -467,8 +468,8 @@ export class TrackScene {
       }
     }
 
-    // Park the selection ring under the selected car (if any & still present),
-    // and draw the rays that car's sensors currently see.
+    // Den Auswahlring unter dem gewählten Auto parken (falls es eins gibt und noch da
+    // ist) und die Strahlen zeichnen, die dessen Sensoren gerade sehen.
     const sel = this.selectedIndex
     if (sel !== null && sel < cars.length) {
       this.selectionRing.visible = true
@@ -484,7 +485,7 @@ export class TrackScene {
   }
 
   /** Zeichnet die 7 Sensor-Strahlen des angeklickten Autos: Ursprung = Auto,
-   *  Länge = gemessener Abstand (`ray·MAX_RAY_M`), Farbe rot (Wand nah) → grün
+   *  Länge = gemessener Abstand (`ray·MAX_RAY_M`), Farbe rot (Wand nah) bis grün
    *  (frei). Aktualisiert nur die vorhandenen Attribute, baut keine Geometrie neu. */
   private updateRays(c: Car) {
     const rays = c.rays
@@ -518,12 +519,12 @@ export class TrackScene {
     this.colorMode = mode
   }
 
-  /** Register a callback fired when the user clicks a car (or empty space → null). */
+  /** Registriert einen Callback, der bei Klick auf ein Auto feuert (leerer Raum gibt null). */
   setOnCarSelect(cb: (i: number | null) => void) {
     this.onCarSelect = cb
   }
 
-  /** Highlight a car by index (null clears the highlight). */
+  /** Hebt ein Auto per Index hervor (null entfernt die Hervorhebung). */
   setSelected(i: number | null) {
     this.selectedIndex = i
   }
@@ -536,7 +537,7 @@ export class TrackScene {
     const down = this.pointerDown
     this.pointerDown = null
     if (!down) return
-    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return // a drag, not a click
+    if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return // ein Ziehen, kein Klick
 
     const rect = this.canvas.getBoundingClientRect()
     const ndc = new THREE.Vector2(
@@ -563,7 +564,7 @@ export class TrackScene {
   }
 
   private makeCar(): CarObj {
-    // A flat box roughly the size of an F1 car, length along +X (heading 0).
+    // Eine flache Box etwa in F1-Auto-Größe, Länge entlang +X (Fahrtrichtung 0).
     const material = new THREE.MeshStandardMaterial({ color: 0xffffff, metalness: 0.1, roughness: 0.6 })
     const box = new THREE.Mesh(new THREE.BoxGeometry(CAR_LENGTH_M, 2, 1), material)
     box.position.z = 0.5
@@ -576,7 +577,7 @@ export class TrackScene {
     return { group, bodyMaterial: material, lastHex: -1 }
   }
 
-  // ── Camera / resize ─────────────────────────────────────────────────────────
+  // ── Kamera und Größenänderung ─────────────────────────────────────────────────
   private resize() {
     const w = this.canvas.clientWidth || 1
     const h = this.canvas.clientHeight || 1

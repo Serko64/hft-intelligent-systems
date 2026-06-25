@@ -22,8 +22,8 @@ interface Props {
 
 const MARGIN = { top: 8, right: 12, bottom: 28, left: 44 }
 
-/** A nivo line chart with wheel-zoom + drag-pan on the X axis. Double-click resets.
- *  Works for any linearly-scaled x data (generation, time in seconds, …). */
+/** Ein nivo-Liniendiagramm mit Mausrad-Zoom und Ziehen auf der X-Achse. Doppelklick setzt zurück.
+ *  Funktioniert für jede linear skalierte X-Achse (Generation, Zeit in Sekunden und so weiter). */
 export function ZoomableLine({
   data, colors, yMin = "auto", yMax = "auto", axisLeftLegend, axisBottomLegend,
   yTicks = 4, markers, height = 160, showLegend,
@@ -31,7 +31,7 @@ export function ZoomableLine({
   const wrap = useRef<HTMLDivElement>(null)
   const drag = useRef<{ px: number; x0: number; x1: number } | null>(null)
 
-  // Full extent of the data on X — the zoom window is clamped to this.
+  // Voller Wertebereich der Daten auf X, das Zoom-Fenster wird darauf begrenzt.
   const [full] = useMemo(() => {
     let lo = Infinity
     let hi = -Infinity
@@ -48,7 +48,7 @@ export function ZoomableLine({
   const [win, setWin] = useState<{ lo: number; hi: number } | null>(null)
   const view = win ?? full
 
-  // px → data-x, accounting for the plot margins.
+  // Pixel in Daten-X umrechnen, unter Berücksichtigung der Plot-Ränder.
   const plotW = () => (wrap.current?.clientWidth ?? 1) - MARGIN.left - MARGIN.right
   const dataXAt = (clientX: number) => {
     const rect = wrap.current!.getBoundingClientRect()
@@ -59,11 +59,11 @@ export function ZoomableLine({
   const onWheel = (e: React.WheelEvent) => {
     e.preventDefault()
     const span = view.hi - view.lo
-    const factor = e.deltaY > 0 ? 1.2 : 1 / 1.2 // out / in
+    const factor = e.deltaY > 0 ? 1.2 : 1 / 1.2 // herauszoomen oder hineinzoomen
     const center = dataXAt(e.clientX)
     let lo = center - (center - view.lo) * factor
     let hi = center + (view.hi - center) * factor
-    // Clamp to the full extent and a sane minimum span.
+    // Auf den vollen Bereich und eine sinnvolle Mindestbreite begrenzen.
     lo = Math.max(full.lo, lo)
     hi = Math.min(full.hi, hi)
     if (hi - lo < (full.hi - full.lo) * 0.01) return
