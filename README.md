@@ -1,19 +1,21 @@
 # hft-intelligent-systems
 
-F1 RL Simulator, ein Reinforcement-Learning-Agent, der lernt, eine Rennstrecke zu
-fahren. Das Projekt besteht aus zwei Teilen, die als eine Desktop-Anwendung
-zusammenlaufen:
+Wir, Funda, Ivan, Sekan und Dana, haben einen F1 RL Simulator gebaut, also einen
+Reinforcement-Learning-Agenten, der lernt, eine Rennstrecke zu fahren. Unser Projekt
+besteht aus zwei Teilen, die wir als eine Desktop-Anwendung zusammenlaufen lassen:
 
 - **Backend** (`f1_rl/`): Python, übernimmt Fahrsimulation, Lernen und Training.
 - **Frontend** (`web/`): React, Vite und three.js, rendert Strecke und Autos und
   schickt die Bedienbefehle zurück.
 
-Verbunden werden die beiden über **pywebview**. Statt eines Servers läuft alles in
+Verbunden haben wir die beiden über **pywebview**. Statt eines Servers läuft alles in
 einem Prozess: ein Desktop-Fenster zeigt das gebaute Web-UI, und JavaScript ruft die
 Python-Methoden direkt über die Bridge auf und zieht die Live-Bilder per `poll()`. Es
 gibt also keinen Netzwerk-Port und keinen separaten Server, der gestartet werden müsste.
 
 ## Funktionen
+
+Über den Verlauf des Projekts haben wir die folgenden Funktionen umgesetzt:
 
 - **Zwei Lern-Backends**
   - **Genetisches DQN:** jede Generation trainiert `N_POP` parallele Double-DQN-Worker,
@@ -51,7 +53,7 @@ gibt also keinen Netzwerk-Port und keinen separaten Server, der gestartet werden
 
 ## Schnellstart
 
-Zuerst wird das Web-UI einmal gebaut, danach startet die Desktop-App, die das gebaute UI
+Zuerst bauen wir das Web-UI einmal, danach startet die Desktop-App, die das gebaute UI
 lädt. Beides läuft vom Repo-Wurzelverzeichnis aus:
 
 ```bash
@@ -73,6 +75,8 @@ Danach öffnet sich das Anwendungsfenster direkt, ein Browser wird nicht gebrauc
 
 ## Architektur (Kurzüberblick)
 
+Wir haben die Anwendung in vier Bereiche gegliedert, die sich gut auseinanderhalten lassen:
+
 - **Simulation** (`f1_rl/simulation/`): die kinematische Fahrphysik als reine Funktionen,
   der Auto-Zustand ist ein Dict. Pro Schritt fallen die Beobachtung (14 Werte inklusive
   sieben Rays), der Reward und die Anzeige-Frames an.
@@ -89,8 +93,8 @@ Danach öffnet sich das Anwendungsfenster direkt, ein Browser wird nicht gebrauc
 
 ## Code-Referenz (Backend)
 
-Die Module sind bewusst ohne Docstrings gehalten, die Verantwortlichkeiten stehen hier und
-die Detail-Semantik einzelner Felder in den Inline-Kommentaren am Code.
+Wir haben die Module bewusst ohne Docstrings gehalten, die Verantwortlichkeiten stehen hier
+und die Detail-Semantik einzelner Felder in den Inline-Kommentaren am Code.
 
 ### Module im Detail
 
